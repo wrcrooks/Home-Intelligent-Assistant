@@ -14,9 +14,11 @@ image on this dev machine (three real bugs found and fixed along the way), and �
 the thing this dev machine's Docker Engine couldn't test — **the real build has now
 succeeded on a real aarch64 HAOS install** (see the P2 packaging section below for
 the Docker-Hub-connectivity error hit on the first attempt, now in
-`hia/DOCS.md`'s Troubleshooting section too). Not yet confirmed: whether the add-on
-actually *starts and runs* after that build — only the build succeeding has been
-reported back so far.
+`hia/DOCS.md`'s Troubleshooting section too). Starting it then surfaced a real
+`Permission denied` bug (the run/finish scripts weren't executable — a Windows
+dev machine doesn't track the Unix `+x` bit) — fixed, but **the fix needs a
+rebuild on the user's install to take effect; whether `hia serve` actually comes
+up through ingress after that rebuild is still the next thing to confirm.**
 
 ### P0 — the Home Assistant client
 
@@ -465,19 +467,42 @@ Documentation tab, not just here.
 
 This confirms the real base image pulls and builds correctly on real aarch64
 hardware — the specific thing this dev machine's Docker Engine couldn't test.
-**Not yet confirmed**: whether the add-on actually *starts* after that (s6-overlay
-invoking `rootfs/etc/services.d/hia/run`, `bashio::config` reading the options the
-user set, `hia serve` coming up and being reachable through ingress) — the retry
-report was about the build succeeding, not about seeing it running. Worth
-following up on specifically once there's a moment to check.
+
+**Then it was actually started, and that surfaced a real bug**: s6 logged
+
+```
+s6-supervise hia: warning: unable to spawn ./run (waiting 60 seconds): Permission denied
+```
+
+`rootfs/etc/services.d/hia/run` and `finish` were written on this project's
+Windows dev machine, which doesn't track a Unix executable bit — they were
+committed as plain `100644` files, and `Permission denied` spawning a script
+(rather than a "bad interpreter" error) is the classic symptom of s6 trying to
+exec a file with no `+x` at all. Confirmed directly: `git ls-files -s` on both
+showed `100644`. Fixed two ways, not just one, since a Windows dev environment
+makes it easy for this to regress silently: `git update-index --chmod=+x` on both
+files (so the repository itself carries the right mode), *and* an explicit
+`RUN chmod +x` in `hia/Dockerfile` after `COPY rootfs /` (so the image is correct
+regardless of whatever mode the checkout that built it happened to have — the
+belt-and-suspenders version that doesn't depend on getting the first part right
+forever). Verified by actually rebuilding and checking inside the image
+(`ls -la /etc/services.d/hia/` → `-rwxr-xr-x` on both, where it was `-rw-r--r--`
+before) — not just trusting the `chmod` line was in the Dockerfile.
+
+**This means the version the user has already installed still has the bug** — it
+needs an add-on rebuild/update once this fix is pushed and pulled. Once rebuilt,
+whether `hia serve` actually comes up and is reachable through ingress is still
+the next thing to confirm; permission-denied is what was blocking that
+observation, not evidence either way about what happens once `run` can execute.
 
 ## What to do next
 
-1. Confirm the add-on actually **starts and runs** on the real aarch64 install now
-   that the build succeeds there — s6-overlay invoking
-   `rootfs/etc/services.d/hia/run`, `bashio::config` correctly reading the
-   options the user set, `hia serve` coming up and being reachable through
-   ingress. The build succeeding is confirmed; running is not, yet.
+1. **Rebuild/update the add-on on the real aarch64 install** to pick up the
+   run/finish executable-bit fix, then confirm it actually **starts and runs**:
+   `bashio::config` correctly reading the options the user set, `hia serve`
+   coming up and being reachable through ingress. The build succeeding and the
+   permission-denied fix are both confirmed; running end-to-end through ingress
+   is not, yet.
 2. **Run `hia serve` (not `hia ingest` — it supersedes it for normal operation)
    against a real house for 72+ hours, unattended**, to close out P0/P1's soak-test
    criteria for real — the one piece of verification no single session can

@@ -82,6 +82,14 @@ RUN uv python install "$(cat .python-version)" \
 COPY --from=frontend-build /src/frontend/dist /app/frontend/dist
 
 COPY rootfs /
+# Explicit, not relying on the source checkout's own file mode bits to survive
+# git clone + COPY correctly: s6 refused to spawn these at all on a real
+# install ("unable to spawn ./run: Permission denied") because they were
+# authored on a Windows dev machine, which doesn't track a Unix executable
+# bit, and git's index for them ended up as plain 100644 files. Fixed in the
+# repository's own git file mode too, but this is the belt-and-suspenders
+# version that doesn't depend on getting that right forever.
+RUN chmod +x /etc/services.d/hia/run /etc/services.d/hia/finish
 
 LABEL \
     org.opencontainers.image.title="Home Intelligent Assistant" \
