@@ -9,15 +9,20 @@ An AI/ML companion add-on for Home Assistant. It learns how a household actually
 behaves from HA's APIs, builds a physical + behavioural model of the home, and
 progressively takes over automation decisions. Web UI for metrics and a digital twin.
 
-**Current state: P0 and P1 both complete.** `backend/` has the HA websocket client
-(P0) and, on top of it, a DuckDB event store, live ingest pipeline (`hia ingest`),
-recorder backfill (`hia backfill`), and a data-quality report (P1) — all verified
-against real Home Assistant instances and a real recorder database, not just the
-test suite. The one thing not done is an actual 72-hour unattended soak test, which
-no single session can complete honestly. Next up is P2 in
-[docs/04-roadmap.md](docs/04-roadmap.md). See [docs/HANDOFF.md](docs/HANDOFF.md) for
-the detail, including two real gaps flagged rather than solved: `statistics`-table
-backfill, and de-duplication between backfill and live ingestion.
+**Current state: P0, P1 complete; P2's backend complete.** `backend/` has the HA
+websocket client (P0), a DuckDB event store with recorder backfill (P1), and now
+`hia serve` (P2) — the process that ships in the add-on: it owns the event store
+outright (ingests, serves REST reads, relays live events over a WebSocket, all
+through one connection), because **DuckDB does not support a separate read-only
+reader alongside a read-write writer** — verified live on Linux, not assumed; see
+`hia.api.state`'s module docstring before designing anything that assumes otherwise.
+`hia ingest`/`hia backfill`/`hia data-quality` remain as standalone tools but must
+never run at the same time as `hia serve` against the same data directory. P2's
+frontend and add-on packaging are not started. The 72-hour unattended soak test is
+still outstanding — no single session can complete it honestly. See
+[docs/HANDOFF.md](docs/HANDOFF.md) for the detail, including a real reconnect bug in
+the P0 client found and fixed this pass (HA can interleave `event` messages with
+`subscribe_events` results across multiple pending subscriptions).
 
 ## Read before designing anything
 

@@ -5,11 +5,12 @@ behaves, builds a physical and behavioural model of the home from Home Assistant
 APIs, and progressively takes over automation decisions — with a web UI that makes the
 learning process and the model's reasoning visible.
 
-> **Status: P0 and P1 complete.** The Home Assistant websocket client, a DuckDB-backed
-> event store with live ingestion, and recorder backfill (`hia watch` / `ingest` /
-> `backfill` / `data-quality`) are built, tested, and verified against real running HA
-> instances and a real recorder database. Next: P2 (the web UI shell). See
-> [docs/HANDOFF.md](docs/HANDOFF.md) for exactly where things stand.
+> **Status: P0/P1 complete; P2's backend complete.** The Home Assistant websocket
+> client, a DuckDB-backed event store with recorder backfill, and `hia serve` — the
+> process that ships in the add-on, owning the store outright to ingest, serve REST
+> reads, and relay live events over a WebSocket in one process — are built, tested,
+> and verified against real running HA instances. Next: the frontend and add-on
+> packaging. See [docs/HANDOFF.md](docs/HANDOFF.md) for exactly where things stand.
 
 ## Documents
 

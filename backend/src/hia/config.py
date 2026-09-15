@@ -8,7 +8,7 @@ one object now means that swap touches this file only.
 
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +21,22 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    supervisor_token: str = Field(default="", validation_alias="SUPERVISOR_TOKEN")
+    """Set automatically by the Supervisor for add-ons that request `hassio_api:
+    true` — deliberately *not* HIA_-prefixed, since this is Supervisor-owned, not
+    ours to name. Its presence is how this process knows it's running as an add-on
+    rather than in local dev."""
+
+    @property
+    def is_addon(self) -> bool:
+        return bool(self.supervisor_token)
+
+    @model_validator(mode="after")
+    def _default_log_json_when_addon(self) -> Settings:
+        if self.is_addon and "log_json" not in self.model_fields_set:
+            self.log_json = True
+        return self
 
     ha_url: str = Field(
         default="ws://localhost:8123",
@@ -70,6 +86,12 @@ class Settings(BaseSettings):
     home-assistant_v2.db inside the HA config directory) for `hia backfill`. SQLite
     only — see hia.ingest.backfill's module docstring for why MariaDB/Postgres
     aren't wired up yet despite the reader being built to support them."""
+
+    api_host: str = "0.0.0.0"
+    api_port: int = 8099
+    """8099 matches the conventional default `ingress_port` for HA add-ons
+    (docs/HANDOFF.md platform facts) — not required, but means the add-on manifest
+    won't need to override it later."""
 
 
 def get_settings() -> Settings:

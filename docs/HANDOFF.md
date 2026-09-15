@@ -6,9 +6,10 @@ stand" for the latest.
 
 ## Where things stand
 
-**P0 and P1 are both done, both verified live.** The one thing genuinely left open is
-the 72-hour unattended soak test, which no single session can complete honestly (see
-below) — everything buildable in one sitting is built.
+**P0 and P1 are done, both verified live. P2's backend (`hia serve`) is done and
+verified live too** — the frontend and add-on packaging halves of P2 are not started.
+The one thing genuinely left open from P0/P1 is the 72-hour unattended soak test,
+which no single session can complete honestly (see below).
 
 ### P0 — the Home Assistant client
 
@@ -157,14 +158,124 @@ is-read-only check, correct context/attribute/old-state extraction, since/until
 filtering, and two "refuse to guess" paths — a missing required column, and a
 database that isn't a recorder database at all).
 
+### P2 — the backend (`hia serve`)
+
+Only the backend half of P2 — no frontend, no add-on packaging (Dockerfile,
+`config.yaml`, s6, ingress deployment) yet; those are what's left of P2's full exit
+criterion ("installs on real HA OS hardware, appears in the sidebar"), which also
+needs actual HAOS hardware this session doesn't have, same caveat as the soak test.
+
+**The single biggest finding this pass, and it changed the architecture.** The
+original plan (`02-architecture.md`, and how P1 was scoped) was: `hia ingest` writes,
+a separate `hia serve` process reads the same DuckDB file read-only. That was wrong.
+Verified against a real Linux container (not just hit first on Windows, then
+confirmed it wasn't Windows-specific): DuckDB has no "one writer, separate readers"
+mode at all. A database file is opened in *either* read-write (exactly one process)
+*or* read-only (any number of processes, none writing) — never a mix. Attempting the
+original design fails immediately with `Conflicting lock is held`. Corrected: `hia
+serve` now owns the store outright — it connects to Home Assistant, ingests every
+subscribed event *and* serves REST reads *and* relays live events over a WebSocket,
+all through one DuckDB connection, in one process. `hia ingest`/`hia
+backfill`/`hia data-quality` remain as standalone tools, but **none of them may run
+at the same time as `hia serve`** against the same `HIA_DATA_DIR` — see
+`hia.api.state`'s module docstring, which is now the canonical explanation, linked
+from every affected docstring (`hia.ingest.store`, `hia.cli`'s command help text).
+If you're about to design something assuming DuckDB supports concurrent
+readers-alongside-a-writer, it doesn't — don't re-derive this the hard way.
+
+`hia.api` (new):
+
+- `state.AppState` — the one connection, one `asyncio.Lock` serializing every access
+  to it (a single DuckDB connection object isn't documented as safe for concurrent
+  multi-thread use either), and `ingest_and_relay()`: the one loop that both writes
+  every subscribed event durably and broadcasts `state_changed` events (with a real
+  new state) to connected browser clients. One pass over `client.events()`, not two
+  independent consumers — `events()` is a single-consumer async generator; a second
+  call would open a second, wasteful HA connection.
+- `app.create_app(settings)` — FastAPI app factory. Routes: `GET /api/health`,
+  `GET /api/entities` (latest known state per entity — `EventStore.latest_states()`,
+  new this pass, with `id DESC` as an explicit tiebreaker on `last_updated` ties,
+  since same-tick writes are real and arbitrary tie-breaking isn't acceptable),
+  `GET /api/data-quality`, `WS /api/ws/events` (live relay, broadcast-only).
+- `ingress.RestrictToSupervisorMiddleware` — restricts inbound HTTP *and* WebSocket
+  connections to the Supervisor's proxy IP (`172.30.32.2`) when `Settings.is_addon`
+  (true iff `SUPERVISOR_TOKEN` is set — new `Settings` field, deliberately not
+  `HIA_`-prefixed, since the Supervisor sets it, not us). Deliberately a raw ASGI
+  middleware, not Starlette's `BaseHTTPMiddleware`, which silently does not intercept
+  `websocket`-scope connections at all — would have left the live relay unprotected.
+- CLI: `hia serve` (host/port default `0.0.0.0:8099` — `8099` matching the
+  conventional add-on `ingress_port` default, so the eventual manifest won't need to
+  override it).
+
+**A real bug in the P0 client, found only by testing a reconnect against a live
+instance under genuine load**, not something any unit test could have caught: when
+subscribing to multiple event types, `_subscribe_all` sent each `subscribe_events`
+command and treated the *next* message received as that command's own result. Home
+Assistant does not guarantee that ordering — it can and does interleave real `event`
+messages (from an already-acknowledged *earlier* subscription) with the `result`
+acknowledgements for *later* ones, especially right after a reconnect, when many
+entities fire near-simultaneous events. Hit exactly there: restarting dev-ha while
+`hia serve` was running produced a `zone.home` state_changed event that arrived
+while the client was still waiting on the `script_started`/`call_service` subscribe
+results, misread as a failed subscription, raised `CommandError`, and killed the
+connection attempt (caught by the outer reconnect loop, so it degraded to endless
+retries rather than crashing — but never actually recovered). Fixed by no longer
+treating "the next message" as special: `_subscribe_all` now just fires all the
+subscribe commands, and the *single* reader loop that already existed
+(`_read_into_queue`) tells `result`s and `event`s apart itself, routing each
+correctly regardless of interleaving. A synthetic regression test reproduces the
+exact race (`tests/ha/test_client.py`, using a new `fake_ha` capability,
+`interleave_event_before_subscription_result`) — verified it actually catches the
+bug by reverting the fix and confirming the test fails with the identical
+`CommandError` shape seen live, before restoring the fix.
+
+**Verified live**, same flow as before, now with `hia ingest` and `hia serve` both
+exercised deliberately at the same time to prove the redesign: `hia serve` alone
+(no separate `hia ingest`) correctly ingested real toggled lights (`/api/entities`,
+`/api/data-quality` both reflected them correctly) while *also* relaying them over a
+real WebSocket connection (a standalone script, not pytest — see below) in real
+time. Then `docker compose restart homeassistant` mid-stream: reconnected cleanly
+with the client fix (`resumed=True`, no `CommandError`), ingestion and the API kept
+working afterward, and `/api/data-quality` correctly showed
+`gap_resumption_count: 1`.
+
+**A second, unrelated environment-specific finding, also worth recording so it
+isn't re-discovered the hard way**: a full end-to-end automated test through
+`/api/ws/events` — Starlette `TestClient`'s WebSocket support, a background
+`asyncio.to_thread` DuckDB write, and `pytest-asyncio`'s own event loop, all at
+once — reproducibly crashes with `Windows fatal exception: access violation` deep in
+CPython's asyncio/selectors internals (reproduced under both the default
+`ProactorEventLoop` and, after switching specifically to rule it out,
+`SelectorEventLoop` too — see `tests/conftest.py`). Not a bug in this project's
+code — the add-on only ever runs on Linux, and the same logic is proven correct two
+other ways: an isolated unit test of `AppState.ingest_and_relay` with no
+`TestClient` at all (`tests/api/test_state.py`), and the real live verification
+above. `tests/api/test_live.py` now sticks to a narrow WS-transport smoke test
+(connects, is tracked, disconnects) that doesn't trigger the crash-prone
+combination. Documented in both test files' docstrings.
+
+42/42 tests passing (18 new across `tests/api/` and the one `hia.ha.client`
+regression test), ruff and mypy `--strict` both clean.
+
+**Explicitly not built, flagged rather than silently deferred:**
+
+- No frontend yet (Vite/React/Tailwind) — the rest of P2.
+- No add-on packaging (Dockerfile, `config.yaml`, s6-overlay, `repository.yaml`) —
+  also the rest of P2, and the only way to actually verify the full exit criterion
+  ("appears in the sidebar" needs real HAOS + Supervisor).
+- `Settings.data_dir` currently assumes one household's worth of data in one
+  process; nothing here re-litigates that.
+
 ## What to do next
 
-1. **Run `hia ingest` against a real house for 72+ hours, unattended**, to close out
-   P0/P1's soak-test criteria for real — the one piece of verification no single
-   session can complete honestly. `hia ingest` is built to run indefinitely and
-   reconnect through anything; actually doing it is what's left.
-2. Then **P2 in [04-roadmap.md](04-roadmap.md)**: the web UI shell.
-3. `statistics` table backfill and live/backfill de-duplication (above) are real
+1. **Run `hia serve` (not `hia ingest` — it supersedes it for normal operation) 
+   against a real house for 72+ hours, unattended**, to close out P0/P1's soak-test
+   criteria for real — the one piece of verification no single session can
+   complete honestly.
+2. Finish **P2 in [04-roadmap.md](04-roadmap.md)**: the frontend, then add-on
+   packaging. The frontend can start against `hia serve`'s existing REST/WS surface
+   today; it doesn't need to wait for packaging.
+3. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
    gaps worth closing, but neither blocks P2 — track them, don't let them stall
    forward progress.
 
@@ -222,6 +333,8 @@ argument — but make the argument out loud.
 | Recorder backfill checks required columns exist, not `schema_version >= N` | Getting N exactly right is its own research problem across every HA release; a version this project has never seen (schema v43, discovered live) worked correctly on the first try because of this |
 | `ulid-transform` for context bin→string, not a hand-rolled decoder | It's the exact package HA's own recorder uses — guarantees a backfilled `context_id` is byte-for-byte the same string live capture would have produced for the same event |
 | `state_changes.context_id` nullable, `events.context_id` not | Backfill reads messier historical data (a few very old rows predate context tracking); live rows are guaranteed one by construction of the HA client |
+| `hia serve` owns ingestion itself, not a separate `hia ingest` process | DuckDB has no one-writer-plus-separate-readers mode at all — verified live on Linux, not assumed; see P2 section above and `hia.api.state` |
+| Raw ASGI middleware for the Supervisor-IP restriction, not `BaseHTTPMiddleware` | `BaseHTTPMiddleware` silently never sees `websocket`-scope connections — would have left the live relay completely unprotected on a real add-on |
 
 ## Platform facts worth not re-deriving
 
@@ -250,6 +363,18 @@ Verified during design; all cited in the docs.
 - **`automation_triggered` still fires** even when the trigger set no context, which is
   what makes the correlation fallback possible.
 - **Node-RED** authenticates as a user account, so its service calls carry a `user_id`.
+- **DuckDB concurrency**: a database file is opened in *either* read-write (exactly
+  one process, full stop) *or* read-only (any number of processes, none writing) —
+  never a mix of one writer and separate readers. Verified against a real Linux
+  container after an initial (wrong) reading of DuckDB's own docs assumed otherwise;
+  see https://duckdb.org/docs/stable/connect/concurrency and the P2 section above.
+- **HA's websocket protocol interleaves messages across subscriptions**: when
+  multiple `subscribe_events` commands are in flight, an `event` for an
+  already-acknowledged earlier subscription can arrive before the `result` for a
+  later one — reliably, right after a reconnect. A client that assumes "the next
+  message after I send a subscribe command is that command's result" will
+  misinterpret a real event as a failed subscription. See `hia.ha.client`'s
+  `_read_into_queue` and the P2 section above.
 
 ## Open questions for the user
 

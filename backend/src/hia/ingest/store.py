@@ -92,23 +92,51 @@ class EntityActivity:
     last_seen: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class LatestState:
+    """The most recently known state of one entity — what a "live entity view"
+    renders (hia.api), read straight from the store rather than requiring its own
+    live HA connection."""
+
+    entity_id: str
+    state: str | None
+    attributes: dict[str, object] | None
+    last_changed: datetime | None
+    last_updated: datetime | None
+
+
 class EventStore:
     """Owns one DuckDB connection and the schema on it.
 
-    DuckDB allows one read-write connection to a database file at a time — this
-    class is meant to be held for the lifetime of the ingest process (or a backfill
-    run), not opened per-write. A future web API reading from the same file while
-    ingest is running (P2) will need its own story here — either DuckDB's read-only
-    connection mode, if the installed version supports concurrent readers alongside
-    a writer, or querying through this process rather than the file directly. Not
-    solved yet; flagged so it doesn't get silently forgotten.
-    """
+    DuckDB's actual multi-process concurrency model — confirmed against a real
+    Linux container, after an initial (wrong) reading of its docs assumed
+    otherwise, see docs/HANDOFF.md — is exactly one of two regimes for a given
+    file: **read-write** (exactly one process, full stop) or **read-only** (any
+    number of processes, none of which may write). There is no mode where one
+    writer coexists with separate readers. `hia serve` therefore owns the store
+    outright — it ingests *and* serves reads through the same connection, in the
+    same process — rather than reading a store a separate `hia ingest` process
+    writes to, the way early P2 design assumed. `hia ingest`/`hia backfill`/
+    `hia data-quality` remain as standalone tools, but none of them may run at the
+    same time as `hia serve` (or each other) against the same data directory —
+    attempting to will surface DuckDB's own "Conflicting lock is held" error.
 
-    def __init__(self, db_path: str | Path) -> None:
+    A single connection object is also not documented as safe for concurrent use
+    from multiple threads (`hia.api.state.AppState` is what serializes access to
+    it with a lock, for the one process — `hia serve` — that needs to)."""
+
+    def __init__(self, db_path: str | Path, *, read_only: bool = False) -> None:
         path = Path(db_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._con = duckdb.connect(str(path))
-        self._con.execute(_SCHEMA)
+        if read_only:
+            if not path.exists():
+                raise FileNotFoundError(
+                    f"Event store not found: {path}. Has `hia ingest` been run yet?"
+                )
+            self._con = duckdb.connect(str(path), read_only=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._con = duckdb.connect(str(path))
+            self._con.execute(_SCHEMA)
 
     def close(self) -> None:
         self._con.close()
@@ -247,6 +275,34 @@ class EventStore:
         ).fetchall()
         return [
             EntityActivity(entity_id=r[0], row_count=r[1], first_seen=r[2], last_seen=r[3])
+            for r in rows
+        ]
+
+    def latest_states(self) -> list[LatestState]:
+        """The most recent row per entity — the "live entity view" (hia.api).
+
+        Ties on ``last_updated`` (possible with same-timestamp backfill rows, and
+        common in tests using a fixed clock) break on ``id`` — insertion order —
+        rather than arbitrarily, so this is deterministic even when HA's own
+        timestamp doesn't distinguish two rows.
+        """
+        rows = self._con.execute(
+            """
+            SELECT entity_id, state, attributes, last_changed, last_updated
+            FROM state_changes
+            QUALIFY row_number()
+                OVER (PARTITION BY entity_id ORDER BY last_updated DESC NULLS LAST, id DESC) = 1
+            ORDER BY entity_id
+            """
+        ).fetchall()
+        return [
+            LatestState(
+                entity_id=r[0],
+                state=r[1],
+                attributes=json.loads(r[2]) if r[2] is not None else None,
+                last_changed=r[3],
+                last_updated=r[4],
+            )
             for r in rows
         ]
 

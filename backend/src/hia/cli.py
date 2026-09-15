@@ -3,7 +3,15 @@
 P0's exit criterion lives here: ``uv run hia watch`` streams live state changes from
 a real Home Assistant instance and survives a Core restart without losing the
 subscription (docs/04-roadmap.md, P0). P1's builds on it: ``hia ingest`` runs the
-same reconnect-proof stream, but durably, into the event store.
+same reconnect-proof stream, but durably, into the event store. ``hia serve`` (P2)
+is the process that actually ships in the add-on: it owns that store outright,
+ingesting *and* serving REST reads plus a live WebSocket relay through the same
+connection — not a separate reader alongside ``hia ingest``, because DuckDB does
+not support a read-write process coexisting with a separate read-only one (verified
+against a real Linux container; see hia.api.state's module docstring and
+docs/HANDOFF.md). ``hia ingest``/``hia backfill``/``hia data-quality`` remain as
+standalone tools, but none of them may run at the same time as ``hia serve``
+against the same data directory.
 """
 
 from __future__ import annotations
@@ -90,7 +98,11 @@ def ingest(
     ),
 ) -> None:
     """Stream live events into the durable event store. This is `watch`, but
-    persisted — P1's exit criterion (docs/04-roadmap.md)."""
+    persisted — P1's exit criterion (docs/04-roadmap.md). A standalone tool for
+    headless/debug use as of P2: `hia serve` now does this itself (plus serving),
+    and the two must not run at the same time against the same HIA_DATA_DIR — the
+    store is opened read-write, and DuckDB allows only one such connection per
+    file (hia.api.state's module docstring explains why)."""
     settings = get_settings()
     configure_logging(settings.log_level, json=settings.log_json)
     event_types = event_type or settings.ingest_event_types
@@ -130,7 +142,11 @@ def backfill(
     """Read Home Assistant's recorder database (read-only, SQLite only) and backfill
     state history into the event store, tagged source=backfill. The other half of
     P1 (docs/04-roadmap.md); see hia.ingest.backfill for what this does and does not
-    handle yet."""
+    handle yet.
+
+    Opens the *event store* read-write, so this cannot run at the same time as
+    `hia ingest`, `hia serve`, or another `hia backfill` against the same
+    HIA_DATA_DIR — see hia.api.state's module docstring for why."""
     settings = get_settings()
     configure_logging(settings.log_level, json=settings.log_json)
     path = db_path or settings.recorder_db_path
@@ -165,12 +181,38 @@ def _parse_iso(value: str, flag: str) -> datetime:
 @app.command(name="data-quality")
 def data_quality() -> None:
     """Print a report on the event store: entity coverage, staleness, and how many
-    times the live stream reconnected (docs/02-architecture.md `ingest/`)."""
+    times the live stream reconnected (docs/02-architecture.md `ingest/`). Opens
+    the store read-only — safe to run alongside another `hia data-quality`, but
+    NOT alongside `hia ingest`, `hia backfill`, or `hia serve`, all of which need
+    the store read-write (hia.api.state's module docstring explains why)."""
     settings = get_settings()
     configure_logging(settings.log_level, json=settings.log_json)
     db_path = Path(settings.data_dir) / "hia.duckdb"
-    with EventStore(db_path) as store:
+    with EventStore(db_path, read_only=True) as store:
         print(format_report(build_report(store)))
+
+
+@app.command()
+def serve() -> None:
+    """Run the web API: connects to Home Assistant, ingests events durably, relays
+    them live over a WebSocket, and serves REST reads — all through one store
+    connection it owns outright (see hia.api.state's module docstring for why:
+    DuckDB doesn't support a separate reader alongside a writer). This supersedes
+    running `hia ingest` separately for normal operation — do not run both against
+    the same HIA_DATA_DIR at once. P2's target (docs/04-roadmap.md); see
+    hia.api.app."""
+    settings = get_settings()
+    configure_logging(settings.log_level, json=settings.log_json)
+    import uvicorn
+
+    from hia.api.app import create_app
+
+    uvicorn.run(
+        create_app(settings),
+        host=settings.api_host,
+        port=settings.api_port,
+        log_config=None,
+    )
 
 
 @app.command()

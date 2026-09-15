@@ -56,6 +56,11 @@ engineering for a house you cannot see.
 **Exit:** the add-on installs from a local repository on real HA OS hardware, appears
 in the sidebar, and shows live state.
 
+> Status: the backend (`hia serve` — ingest + REST + live WebSocket relay, one
+> process; see docs/HANDOFF.md for why not a separate reader) is built and verified
+> live. The frontend and add-on packaging are not started; the exit criterion needs
+> both of those plus real HAOS hardware this project hasn't had access to yet.
+
 ---
 
 ### P3 — Provenance classifier · ~2–3 weeks

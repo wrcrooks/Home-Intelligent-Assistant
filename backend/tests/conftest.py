@@ -7,12 +7,24 @@ handshake, ``subscribe_events``, event delivery, registry commands, and — via
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestServer
+
+if sys.platform == "win32":
+    # hia.api's tests run two event loops concurrently on separate threads
+    # (pytest-asyncio's for this fixture's fake server, and starlette
+    # TestClient's own portal thread for the WebSocket-under-test). The default
+    # ProactorEventLoop's IOCP polling is unstable across threads on Windows in
+    # exactly that configuration (a reproducible `Windows fatal exception: access
+    # violation` inside asyncio's windows_events._poll, not a bug in this
+    # project's own code). SelectorEventLoop doesn't have that failure mode and
+    # this project spawns no subprocesses in tests, so it loses nothing here.
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 VALID_TOKEN = "test-token"
 
@@ -26,9 +38,21 @@ class FakeHomeAssistant:
         self.rejected_connections = 0
         self._registry_responses: dict[str, list[dict[str, Any]]] = {}
         self._subscription_event = asyncio.Event()
+        self._interleave: tuple[str, str, dict[str, Any]] | None = None
 
     def set_registry_response(self, command: str, rows: list[dict[str, Any]]) -> None:
         self._registry_responses[command] = rows
+
+    def interleave_event_before_subscription_result(
+        self, *, before_subscribing_to: str, push_event_type: str, push_data: dict[str, Any]
+    ) -> None:
+        """Reproduces the real-world race that broke ``_subscribe_all``: when the
+        subscribe_events request for ``before_subscribing_to`` arrives, send a real
+        event *first*, then that subscription's own result — exactly what Home
+        Assistant can do when a burst of events (typical right after a Core
+        restart) lands while a later subscription in the same batch is still
+        pending."""
+        self._interleave = (before_subscribing_to, push_event_type, push_data)
 
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(heartbeat=30)
@@ -52,8 +76,13 @@ class FakeHomeAssistant:
             msg_id = message.get("id")
 
             if msg_type == "subscribe_events":
-                self.subscriptions.append(message["event_type"])
+                event_type = message["event_type"]
+                self.subscriptions.append(event_type)
                 self._subscription_event.set()
+                if self._interleave is not None and self._interleave[0] == event_type:
+                    _, push_type, push_data = self._interleave
+                    self._interleave = None
+                    await self.push_event(push_type, push_data)
                 await ws.send_json(
                     {"id": msg_id, "type": "result", "success": True, "result": None}
                 )

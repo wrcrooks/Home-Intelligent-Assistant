@@ -179,10 +179,19 @@ Nothing reaches a service call without passing through here.
 
 ### `api/` + `ui/` — FastAPI and React
 
-- FastAPI serves REST plus a WebSocket for live push. Under ingress it must honour
-  `X-Ingress-Path` for base-URL rewriting, listen on the declared ingress port, and
-  refuse connections that do not originate from the Supervisor (`172.30.32.2`).
-- React + TypeScript + Vite + Tailwind. Panels:
+- FastAPI serves REST plus a WebSocket for live push, as `hia serve` (P2, built) —
+  the process that actually ships in the add-on. It owns the event store outright:
+  ingests every subscribed HA event, serves REST reads, and relays live events over
+  the WebSocket, all through one DuckDB connection in one process, **not** a
+  separate reader alongside a standalone `hia ingest` — DuckDB does not support a
+  read-write process coexisting with a separate read-only one (verified against a
+  real Linux container; see docs/HANDOFF.md and `hia.api.state`'s module
+  docstring). Under ingress it must honour `X-Ingress-Path` for base-URL rewriting,
+  listen on the declared ingress port (default `8099`), and refuse HTTP *and*
+  WebSocket connections that do not originate from the Supervisor (`172.30.32.2`) —
+  built as a raw ASGI middleware, since Starlette's `BaseHTTPMiddleware` silently
+  never sees WebSocket-scope connections.
+- React + TypeScript + Vite + Tailwind (not started). Panels:
   - **Overview** — autonomy state, today's decisions, reward components, alerts.
   - **Twin** — 2D floorplan (3D later) with live states, occupancy heat, predicted
     vs actual temperature, and the model's attention for the current decision.

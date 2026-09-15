@@ -112,6 +112,46 @@ async def test_reconnects_and_resubscribes_with_monotonic_seq(
             await events_iter.aclose()
 
 
+async def test_events_delivered_while_a_later_subscription_is_still_pending(
+    fake_ha: tuple[FakeHomeAssistant, str],
+) -> None:
+    """Reproduces the real bug: subscribing to multiple event types, where Home
+    Assistant sends a real event for an *already-acknowledged* earlier subscription
+    before the result for a *later* one — reliably seen right after a Core restart,
+    when many entities fire near-simultaneous events. An earlier version of
+    `_subscribe_all` read exactly one message per pending subscription and assumed
+    it was always that subscription's own result, misread the interleaved event as
+    a failed subscription, and raised — only caught by testing a real reconnect
+    against a live instance. See hia.ha.client._read_into_queue's docstring."""
+    server, base_url = fake_ha
+    server.interleave_event_before_subscription_result(
+        before_subscribing_to="call_service",  # the last of the four below
+        push_event_type="state_changed",
+        push_data=_state_changed_data("light.kitchen"),
+    )
+
+    async with aiohttp.ClientSession() as session:
+        client = HomeAssistantClient(base_url, VALID_TOKEN, session=session)
+        events_iter = client.events(
+            ["state_changed", "automation_triggered", "script_started", "call_service"]
+        )
+        try:
+            watched = await anext(events_iter)
+            state_changed = watched.event.as_state_changed()
+            assert state_changed is not None
+            assert state_changed.entity_id == "light.kitchen"
+
+            await server.wait_for_subscriptions(4)
+            assert server.subscriptions == [
+                "state_changed",
+                "automation_triggered",
+                "script_started",
+                "call_service",
+            ]
+        finally:
+            await events_iter.aclose()
+
+
 async def test_drops_events_under_backpressure_instead_of_blocking(
     fake_ha: tuple[FakeHomeAssistant, str],
 ) -> None:

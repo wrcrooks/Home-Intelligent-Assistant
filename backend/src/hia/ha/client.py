@@ -109,7 +109,7 @@ class HomeAssistantClient:
             try:
                 async with self._session.ws_connect(self._url, heartbeat=30) as ws:
                     await self._authenticate(ws)
-                    await self._subscribe_all(ws, event_types)
+                    pending_subscriptions = await self._subscribe_all(ws, event_types)
                     logger.info(
                         "ha_connected",
                         url=self._url,
@@ -120,7 +120,9 @@ class HomeAssistantClient:
                     resumed_after_gap = not first_connection
                     first_connection = False
 
-                    reader_task = asyncio.create_task(self._read_into_queue(ws, queue))
+                    reader_task = asyncio.create_task(
+                        self._read_into_queue(ws, queue, pending_subscriptions)
+                    )
                     try:
                         async for item in self._drain(queue):
                             yield WatchedEvent(
@@ -155,8 +157,26 @@ class HomeAssistantClient:
             yield item
 
     async def _read_into_queue(
-        self, ws: aiohttp.ClientWebSocketResponse, queue: asyncio.Queue[HAEvent | object]
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+        queue: asyncio.Queue[HAEvent | object],
+        pending_subscriptions: dict[int, str],
     ) -> None:
+        """The one loop that reads every message off this connection — both the
+        `result` acknowledgements for the subscribe_events commands sent in
+        :meth:`_subscribe_all` and the actual events those subscriptions produce.
+
+        It has to be one loop, not "wait for N results, then start reading events":
+        Home Assistant does not guarantee a subscription's result arrives before
+        events from an *earlier* subscription in the same batch. Right after a
+        reconnect especially, many entities fire near-simultaneous events, and one
+        can easily arrive while a later subscribe_events call is still waiting on
+        its own result. A version of this method that read exactly one message per
+        pending subscription and assumed it was that subscription's result
+        misread such an event as a failed subscription and raised — caught only by
+        testing an actual Core restart against a live instance, since a test
+        double that never interleaves messages this way can't reproduce it.
+        """
         try:
             async for raw in ws:
                 if raw.type is aiohttp.WSMsgType.ERROR:
@@ -167,7 +187,17 @@ class HomeAssistantClient:
                     continue
 
                 message = raw.json()
-                if message.get("type") != "event":
+                msg_type = message.get("type")
+
+                if msg_type == "result":
+                    event_type = pending_subscriptions.pop(message.get("id"), None)
+                    if event_type is not None and not message.get("success", False):
+                        logger.error(
+                            "subscribe_failed", event_type=event_type, result=message
+                        )
+                    continue
+
+                if msg_type != "event":
                     continue
                 event = HAEvent.model_validate(message["event"])
                 try:
@@ -197,14 +227,19 @@ class HomeAssistantClient:
 
     async def _subscribe_all(
         self, ws: aiohttp.ClientWebSocketResponse, event_types: list[str]
-    ) -> None:
+    ) -> dict[int, str]:
+        """Sends a subscribe_events command per event type and returns a
+        message-id -> event_type map of subscriptions awaiting confirmation.
+        Deliberately does not wait for each result here — see
+        :meth:`_read_into_queue`, the only place that can safely tell a result
+        from an interleaved event."""
+        pending: dict[int, str] = {}
         for msg_id, event_type in enumerate(event_types, start=1):
             await ws.send_json(
                 {"id": msg_id, "type": "subscribe_events", "event_type": event_type}
             )
-            result = await ws.receive_json()
-            if not result.get("success", False):
-                raise CommandError(f"Failed to subscribe to {event_type!r}: {result}")
+            pending[msg_id] = event_type
+        return pending
 
     async def call(self, message: dict[str, Any]) -> Any:
         """One-shot request/response (registry lookups, service calls) over a fresh

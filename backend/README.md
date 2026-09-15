@@ -25,17 +25,27 @@ throwaway instance in `../compose/dev-ha/` if you don't want to use a real house
 uv run hia check           # connect, authenticate, disconnect — confirms config is right
 uv run hia watch           # stream live state_changed events to stdout until Ctrl-C
 uv run hia registry        # dump the entity/device/area/floor/label registries as JSON
-uv run hia ingest          # like watch, but persisted into the DuckDB event store
+uv run hia serve           # the real thing: ingest + REST API + live WS relay, one process
 uv run hia backfill \
   --db-path /path/to/home-assistant_v2.db   # read-only; SQLite only for now
 uv run hia data-quality    # report on what's in the event store
+uv run hia ingest          # standalone ingest-only tool — see the warning below
 ```
 
-`watch`/`ingest` are P0/P1's reconnect exit criterion (docs/04-roadmap.md): they
+`watch`/`serve` are P0/P1/P2's reconnect exit criterion (docs/04-roadmap.md): they
 should keep streaming across a Home Assistant Core restart, reconnecting and
-resubscribing on their own. `ingest` writes to `{HIA_DATA_DIR}/hia.duckdb`
-(default `./.data/hia.duckdb`, gitignored); `backfill` writes into the same file.
-`--db-path` defaults to `HIA_RECORDER_DB_PATH` if set.
+resubscribing on their own. `serve` owns the event store outright — connects to HA,
+ingests every subscribed event, serves `GET /api/entities` / `GET /api/data-quality`
+and `WS /api/ws/events` off `{HIA_DATA_DIR}/hia.duckdb` (default
+`./.data/hia.duckdb`, gitignored), all through one connection, on `:8099` by default.
+
+**`hia ingest`, `hia backfill`, and `hia data-quality` must never run at the same
+time as `hia serve`** (or each other, except `data-quality` can coexist with another
+`data-quality`) against the same `HIA_DATA_DIR` — DuckDB allows a database file to
+be opened in *either* read-write (exactly one process) *or* read-only (any number of
+processes, none writing), never a mix of one writer and separate readers. Verified
+against a real Linux container; see `hia.api.state`'s module docstring. `--db-path`
+defaults to `HIA_RECORDER_DB_PATH` if set.
 
 ## Checks
 
