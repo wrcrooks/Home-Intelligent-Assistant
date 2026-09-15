@@ -2,13 +2,15 @@
 
 P0's exit criterion lives here: ``uv run hia watch`` streams live state changes from
 a real Home Assistant instance and survives a Core restart without losing the
-subscription (docs/04-roadmap.md, P0).
+subscription (docs/04-roadmap.md, P0). P1's builds on it: ``hia ingest`` runs the
+same reconnect-proof stream, but durably, into the event store.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import aiohttp
 import typer
@@ -16,6 +18,9 @@ import typer
 from hia.config import Settings, get_settings
 from hia.ha.client import HomeAssistantClient
 from hia.ha.registry import Registries, fetch_all
+from hia.ingest.pipeline import run_ingest
+from hia.ingest.quality import build_report, format_report
+from hia.ingest.store import EventStore
 from hia.logging import configure_logging, get_logger
 
 app = typer.Typer(add_completion=False, help="Home Intelligent Assistant backend CLI.")
@@ -67,6 +72,47 @@ async def _watch(settings: Settings, event_types: list[str]) -> None:
                 entity_id=watched.event.data.get("entity_id"),
                 new_state=new_state,
             )
+
+
+@app.command()
+def ingest(
+    event_type: list[str] | None = typer.Option(
+        None,
+        "--event-type",
+        "-e",
+        help="Event type(s) to subscribe to. Defaults to HIA_INGEST_EVENT_TYPES "
+        "(state_changed, automation_triggered, script_started, call_service).",
+    ),
+    stop_after: int = typer.Option(
+        0, "--stop-after", help="Exit after writing this many events. 0 = run forever."
+    ),
+) -> None:
+    """Stream live events into the durable event store. This is `watch`, but
+    persisted — P1's exit criterion (docs/04-roadmap.md)."""
+    settings = get_settings()
+    configure_logging(settings.log_level, json=settings.log_json)
+    event_types = event_type or settings.ingest_event_types
+    asyncio.run(_ingest(settings, event_types, stop_after or None))
+
+
+async def _ingest(settings: Settings, event_types: list[str], stop_after: int | None) -> None:
+    db_path = Path(settings.data_dir) / "hia.duckdb"
+    with EventStore(db_path) as store:
+        logger.info("ingest_starting", db_path=str(db_path), event_types=event_types)
+        async with aiohttp.ClientSession() as session:
+            client = _client_for(settings, session)
+            await run_ingest(client, store, event_types, stop_after=stop_after)
+
+
+@app.command(name="data-quality")
+def data_quality() -> None:
+    """Print a report on the event store: entity coverage, staleness, and how many
+    times the live stream reconnected (docs/02-architecture.md `ingest/`)."""
+    settings = get_settings()
+    configure_logging(settings.log_level, json=settings.log_json)
+    db_path = Path(settings.data_dir) / "hia.duckdb"
+    with EventStore(db_path) as store:
+        print(format_report(build_report(store)))
 
 
 @app.command()

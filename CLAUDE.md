@@ -9,14 +9,12 @@ An AI/ML companion add-on for Home Assistant. It learns how a household actually
 behaves from HA's APIs, builds a physical + behavioural model of the home, and
 progressively takes over automation decisions. Web UI for metrics and a digital twin.
 
-**Current state: P0 complete.** `backend/` has the package scaffold, the Home
-Assistant websocket client (auth, subscribe, reconnect + resubscribe, monotonic
-event sequence, bounded-queue backpressure), registry sync, and a `hia` CLI
-(`watch` / `registry` / `check`), covered by tests and clean under ruff + mypy —
-and its exit criterion (`hia watch` surviving a Core restart) has been verified
-against a real running Home Assistant instance, not just the test suite. Next up is
-P1 in [docs/04-roadmap.md](docs/04-roadmap.md); see [docs/HANDOFF.md](docs/HANDOFF.md)
-for the detail.
+**Current state: P0 complete, P1 in progress.** `backend/` has the HA websocket
+client (P0) and, on top of it, a DuckDB event store + live ingest pipeline (`hia
+ingest`) that captures every event's context fields from day one, plus a data-quality
+report — both verified against a real running Home Assistant instance, not just the
+test suite. Still open in P1: recorder backfill, and an actual 72-hour unattended
+soak test. See [docs/HANDOFF.md](docs/HANDOFF.md) for the detail.
 
 ## Read before designing anything
 

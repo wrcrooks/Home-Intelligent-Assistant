@@ -62,10 +62,21 @@ flowchart TB
 - Append-only event log. **DuckDB + partitioned Parquet** is the default: embedded,
   no extra container, excellent for the analytical scans training needs, cheap to
   ship inside an add-on. TimescaleDB is an optional backend for large installs.
+  In practice this is a two-tier design: DuckDB's own file is the live, authoritative
+  append target (simple, transactional, no file-rotation logic to get wrong); the
+  partitioned-Parquet side is produced on demand as frozen training snapshots
+  (docs/06-model-training.md §1's `dataset_id` mechanism), not written on the live
+  path. Two tables: `state_changes` (typed — the dominant, heavily-queried event) and
+  `events` (generic JSON `data`, for automation_triggered/script_started/call_service
+  and anything else, interpreted later by provenance). Built in P1; see
+  docs/HANDOFF.md for the concrete schema.
 - Backfill replays recorder history into the same schema, so live and historical
-  data are indistinguishable downstream.
+  data are indistinguishable downstream. (Not yet built as of P1's first slice —
+  live ingestion landed first because it starts a clock that backfill doesn't.)
 - Data quality report: entities with no history, sensors that flap, units that
-  change mid-series, gaps in the stream.
+  change mid-series, gaps in the stream. V1 (P1) covers no-history/stale entities and
+  gap detection via the reconnect flag every row carries; flapping/unit-change
+  detection is deferred to P4, once there's real data to calibrate "flapping" against.
 
 ### `features/` — turning a heterogeneous house into tensors
 

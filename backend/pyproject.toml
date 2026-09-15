@@ -7,8 +7,10 @@ requires-python = ">=3.13"
 license = { text = "TBD" }
 dependencies = [
   "aiohttp>=3.10",
+  "duckdb>=1.5.5",
   "pydantic>=2.9",
   "pydantic-settings>=2.6",
+  "pytz>=2026.3.post1",
   "structlog>=24.4",
   "typer>=0.13",
 ]

@@ -1,14 +1,18 @@
 # Handoff
 
-For an agent or developer picking this up cold. Written 2026-09-09, updated 2026-09-15
-to add [06-model-training.md](06-model-training.md), updated again the same day as P0
-got underway and again once its exit criterion was actually verified live.
+For an agent or developer picking this up cold. Written 2026-09-09; updated
+2026-09-15 several times as work actually landed — see the bottom of "Where things
+stand" for the latest.
 
 ## Where things stand
 
-**P0 is done, exit criterion verified against a real, running Home Assistant
-instance** — not just the fake test server. `backend/` (Python 3.13, managed with
-`uv`) has:
+**P0 is done, verified live. P1 is partly done** — live ingestion + storage is built,
+tested, and verified live; recorder backfill (the other half of P1) is not started.
+
+### P0 — the Home Assistant client
+
+Exit criterion verified against a real, running Home Assistant instance, not just the
+fake test server. `backend/` (Python 3.13, managed with `uv`) has:
 
 - `hia.config` — settings via `pydantic-settings`, `HIA_`-prefixed env vars / `.env`.
 - `hia.logging` — structlog, JSON or console rendering.
@@ -62,17 +66,71 @@ The throwaway instance and its generated state were torn down afterward
 (`docker compose down` + config directory cleaned); nothing from that run is meant to
 persist, and `compose/dev-ha/config/` is now gitignored except `configuration.yaml`.
 
+### P1, part 1 — live ingestion and the event store
+
+`hia.ingest` (new):
+
+- `store.EventStore` — one DuckDB file (`{data_dir}/hia.duckdb`, gitignored), two
+  tables. `state_changes` is typed (entity_id, state, attributes, old_state,
+  timestamps, the three context columns) and is what both the live writer and
+  (once it exists) recorder backfill write into — "live and historical data are
+  indistinguishable downstream." `events` is generic (JSON `data` column) and
+  captures everything else this project subscribes to: `automation_triggered`,
+  `script_started`, `call_service`. Every row on both tables carries
+  `context_id`/`context_parent_id`/`context_user_id` from day one — captured now
+  because, per the roadmap's "cannot be retrofitted" list, it can't be added later.
+- `pipeline.run_ingest` — consumes `HomeAssistantClient.events()` and writes each one
+  via `asyncio.to_thread` (DuckDB's Python API is synchronous; this keeps a write from
+  ever blocking the event loop, consistent with why the client's own reader is
+  decoupled from consumer speed).
+- `quality.build_report` — a first data-quality report: total counts, per-entity
+  staleness, and a count of `resumed_after_gap` rows (how many times the live window
+  had a reconnect and may have missed something). Flapping-sensor and unit-change
+  detection are explicitly deferred to P4 — what counts as "flapping" is itself a
+  modelling question that needs real data volume to answer sensibly, not a v1 concern.
+- CLI: `hia ingest` (runs `watch`'s reconnect-proof stream, but persisted;
+  `--stop-after N` for smoke tests) and `hia data-quality`.
+- 18/18 tests passing (10 new), ruff and mypy clean. `duckdb`'s Python client needed
+  `pytz` at runtime to materialize `min()`/`max()` over `TIMESTAMPTZ` columns —
+  not obvious from the failure mode (`ModuleNotFoundError` surfacing through a DuckDB
+  `InvalidInputException`), now pinned as a direct dependency rather than an
+  undeclared transitive one.
+
+**Verified live**, same throwaway-instance flow as P0: ran `hia ingest --stop-after 5`
+against the dev instance while toggling real lights via the REST API, then inspected
+the resulting `.duckdb` file directly. Worth keeping on record: the `call_service` row
+and the `state_changed` row it caused share the same `context_id` — a live, small-scale
+demonstration of exactly the context-chain linkage the provenance classifier's Layer 1
+(P3) depends on. `hia data-quality` correctly reported the 2 state_changes / 3 events
+split. Instance torn down afterward as usual.
+
+**Not done, and explicitly deferred rather than attempted this pass:**
+
+- **Recorder backfill** (reading `states`/`states_meta`/`statistics` from HA's own
+  recorder DB with `schema_version` detection) — the other half of P1's roadmap
+  entry. Live ingestion was built first because it's the piece that starts a clock
+  (see below); backfill matters but doesn't get more expensive by waiting a bit.
+- **The 72-hour-without-a-gap soak test.** Not something a single session can
+  complete honestly. `hia ingest` is built to run indefinitely and reconnect through
+  anything; actually running it for 72 hours is on whoever has a real house pointed
+  at this next.
+
 ## What to do next
 
-Move to **P1 in [04-roadmap.md](04-roadmap.md)**: event storage (DuckDB + Parquet)
-and — critically — start capturing `context` fields and `automation_triggered` /
-`call_service` on every event from day one, since that capture cannot be retrofitted
-(see "Traps" in `CLAUDE.md`).
+1. **Recorder backfill**, to finish P1: a read-only reader for HA's recorder DB
+   (SQLite first and verified — that's what an actual HA OS install and this
+   project's own dev-ha both use; MariaDB/Postgres should work via the same
+   SQLAlchemy-based approach but is unverified, since there's no live instance of
+   either to test against yet — say so rather than claiming support that hasn't been
+   checked), writing into the *same* `state_changes` table the live writer uses.
+2. Actually run `hia ingest` against a real house for 72+ hours, unattended, to close
+   out P0/P1's soak-test criteria for real.
+3. Then **P2 in [04-roadmap.md](04-roadmap.md)**: the web UI shell.
 
 Do not skip ahead to the interesting parts. P1 starts a data clock that cannot be
 rewound, and every model in the project is bottlenecked on how long it has been
 running. Getting ingestion live on the user's real house is worth more than any amount
-of early model work.
+of early model work — which is exactly why it was built before backfill, not after.
 
 ## This dev machine has an RTX 3060
 

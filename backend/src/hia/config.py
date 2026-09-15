@@ -51,6 +51,20 @@ class Settings(BaseSettings):
     the read loop, so the queue drops the newest event and logs a counter rather than
     blocking when full."""
 
+    data_dir: str = "./.data"
+    """Where the event store (and later, model artifacts) live. Under the add-on this
+    is a persistent volume path; locally it's a gitignored directory under backend/."""
+
+    ingest_event_types: list[str] = [
+        "state_changed",
+        "automation_triggered",
+        "script_started",
+        "call_service",
+    ]
+    """Subscribed alongside state_changed from day one, per docs/04-roadmap.md P1 and
+    docs/05-provenance.md §7: automation firings can't be attributed retroactively, so
+    they're captured now even though nothing interprets them until P3."""
+
 
 def get_settings() -> Settings:
     """Load settings fresh from the environment.
