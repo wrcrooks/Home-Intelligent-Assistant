@@ -24,15 +24,18 @@ absolute `/api/...` path, so it survives being served from HA ingress's
 runtime-assigned path prefix. Verified with a real headless-browser screenshot of a
 live update arriving with no page reload, not just curl.
 
-**Add-on packaging (`repository.yaml`, `hia/`) is built and running correctly
-end-to-end**, verified by actually building and running the image (substituting a
-pullable base for the base-image stage only — the real
-`ghcr.io/home-assistant/base-debian` still can't be pulled on this dev machine).
-The repository is now public (was private; audited for anything sensitive in
-history first, then made public — Supervisor adds an app repository the same way
-it would clone any git URL, unauthenticated, so a private repo couldn't have been
-added by anyone). P3 (provenance classifier) hasn't started. The 72-hour unattended
-soak test is still outstanding — no single session can complete it honestly. See
+**Add-on packaging (`repository.yaml`, `hia/`) is built, and the real build has now
+succeeded on a real aarch64 HAOS install** — the one thing this dev machine's
+Docker Engine couldn't itself verify (it can't pull the real
+`ghcr.io/home-assistant/base-debian`; a substitute base image was used here
+instead, application logic confirmed working inside it). The repository is now
+public (was private; audited for anything sensitive in history first, then made
+public — Supervisor adds an app repository the same way it would clone any git
+URL, unauthenticated, so a private repo couldn't have been added by anyone). Not
+yet confirmed: whether the add-on actually starts and runs after that real build
+(s6-overlay/bashio/ingress) — only the build succeeding has been reported so far.
+P3 (provenance classifier) hasn't started. The 72-hour unattended soak test is
+still outstanding — no single session can complete it honestly. See
 [docs/HANDOFF.md](docs/HANDOFF.md) for the detail, including a real reconnect bug
 in the P0 client found and fixed during P2 (HA can interleave `event` messages with
 `subscribe_events` results

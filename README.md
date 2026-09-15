@@ -11,11 +11,12 @@ learning process and the model's reasoning visible.
 > WebSocket, all in one process), and a React frontend (live entity view + data
 > quality, served directly by `hia serve`) are all built, tested, and verified
 > end-to-end against real running HA instances — including a real browser rendering
-> real live updates. **Add-on packaging (`repository.yaml`, `hia/`) is built and
-> verified running correctly inside the real container image** (base-image pull
-> itself still blocked by this dev machine's Docker Engine — same limitation as
-> P0's HA Core image). The repository is now public. See
-> [docs/HANDOFF.md](docs/HANDOFF.md) for exactly where things stand.
+> real live updates. **Add-on packaging (`repository.yaml`, `hia/`) is built, and
+> the real build has succeeded on a real aarch64 HAOS install** — the one piece
+> this dev machine's own Docker Engine couldn't verify. The repository is now
+> public. Not yet confirmed: whether the add-on actually starts and runs after
+> that build. See [docs/HANDOFF.md](docs/HANDOFF.md) for exactly where things
+> stand.
 
 ## Documents
 

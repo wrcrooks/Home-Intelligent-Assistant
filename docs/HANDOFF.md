@@ -9,12 +9,14 @@ stand" for the latest.
 **P0, P1 and P2's backend+frontend are done, all verified live** — including a real
 browser rendering real live updates against a real house. **P2's packaging: the
 repository is now public** (the user's call, made after an audit found nothing
-sensitive in history) and the Docker build works end-to-end against a substitute
-base image, with the application actually running and serving correctly inside the
-built container — three real bugs found and fixed along the way (see the P2
-packaging section below). The one thing still unverified is the *real* HA base
-image specifically: this dev machine's Docker Engine can't pull it, the same
-limitation already documented for P0's HA Core image.
+sensitive in history), the Docker build works end-to-end against a substitute base
+image on this dev machine (three real bugs found and fixed along the way), and —
+the thing this dev machine's Docker Engine couldn't test — **the real build has now
+succeeded on a real aarch64 HAOS install** (see the P2 packaging section below for
+the Docker-Hub-connectivity error hit on the first attempt, now in
+`hia/DOCS.md`'s Troubleshooting section too). Not yet confirmed: whether the add-on
+actually *starts and runs* after that build — only the build succeeding has been
+reported back so far.
 
 ### P0 — the Home Assistant client
 
@@ -334,7 +336,7 @@ paths, not absolute ones.
 - The data-quality page polls every 10s rather than being push-driven; the live
   relay only carries `state_changed` events by design (docs/HANDOFF.md's P2 part 1).
 
-### P2, part 3 — add-on packaging (built, verified except the real base image)
+### P2, part 3 — add-on packaging (built; real build confirmed on real aarch64 HAOS)
 
 `repository.yaml` (repo root) and `hia/` (config.yaml, Dockerfile, rootfs, DOCS.md,
 translations/en.yaml) exist. Layout was corrected mid-build after checking a real,
@@ -439,19 +441,43 @@ real built frontend plus every REST endpoint (`/`, `/api/health`, `/api/entities
 `linux/arm64` via QEMU emulation — succeeded cleanly, confirming DuckDB has a
 working manylinux wheel for aarch64 too, not just amd64.
 
-**Still unverified**: the real base image specifically (pull blocked by this dev
-machine's Docker Engine), and therefore whether s6-overlay actually invokes
-`rootfs/etc/services.d/hia/run` the way described — that script's own
-`bashio::config` calls need bashio, which only exists in the real base image, so
-it could not be exercised here at all.
+**Resolved on real hardware, by the user, on a real aarch64 HAOS install**: the
+build that couldn't be attempted with the real base image on this dev machine
+(Docker Engine limitation, above) was tried for real and **succeeded** — install
+failed on the first attempt with
+
+```
+Can't pull image docker:28.3.3-cli: [500] Head "https://registry-1.docker.io/...":
+Get "https://auth.docker.io/token?...": net/http: TLS handshake timeout
+```
+
+which is Supervisor's *own* internal buildx helper image failing a plain network
+TLS handshake against Docker Hub — confirmed by checking what `docker:28.3.3-cli`
+actually is (Supervisor's containerized build environment, used so add-on builds
+are consistent across HAOS and Supervised installs; see
+[home-assistant/discussions#77](https://github.com/orgs/home-assistant/discussions/77))
+rather than assumed — nothing in this app's own `Dockerfile` or `config.yaml`
+references that image, and the failure happened before Supervisor even reached
+this repo. A plain retry succeeded. Added to `hia/DOCS.md`'s new Troubleshooting
+section (clock skew, IPv6, DNS/firewall to `registry-1.docker.io`/`auth.docker.io`
+as the likely causes if a retry doesn't fix it) so it shows up in the add-on's own
+Documentation tab, not just here.
+
+This confirms the real base image pulls and builds correctly on real aarch64
+hardware — the specific thing this dev machine's Docker Engine couldn't test.
+**Not yet confirmed**: whether the add-on actually *starts* after that (s6-overlay
+invoking `rootfs/etc/services.d/hia/run`, `bashio::config` reading the options the
+user set, `hia serve` coming up and being reachable through ingress) — the retry
+report was about the build succeeding, not about seeing it running. Worth
+following up on specifically once there's a moment to check.
 
 ## What to do next
 
-1. Get a real build of `hia/Dockerfile` against the *real* base image (not the
-   `python:3.13-slim` substitute) working — needs either a newer Docker Engine on
-   a dev machine, or building elsewhere (GitHub Actions runners don't have this
-   project's local Docker Engine version problem). This is what would finally
-   verify s6-overlay/bashio actually invoking the run script.
+1. Confirm the add-on actually **starts and runs** on the real aarch64 install now
+   that the build succeeds there — s6-overlay invoking
+   `rootfs/etc/services.d/hia/run`, `bashio::config` correctly reading the
+   options the user set, `hia serve` coming up and being reachable through
+   ingress. The build succeeding is confirmed; running is not, yet.
 2. **Run `hia serve` (not `hia ingest` — it supersedes it for normal operation)
    against a real house for 72+ hours, unattended**, to close out P0/P1's soak-test
    criteria for real — the one piece of verification no single session can

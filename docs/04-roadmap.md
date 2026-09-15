@@ -60,12 +60,12 @@ in the sidebar, and shows live state.
 > process; see docs/HANDOFF.md for why not a separate reader) and the frontend
 > (live entity view + data quality, served directly by `hia serve`) are both built
 > and verified live end-to-end, including in a real browser. Add-on packaging
-> (`repository.yaml`, `hia/`) is built and verified running correctly inside the
-> real container — the repository, once private (blocking Supervisor from ever
-> adding it as a source at all), is now public. The one thing still unverified is
-> the real HA base image itself: this dev machine's Docker Engine can't pull it,
-> same limitation already hit on P0's HA Core image. The exit criterion also needs
-> real HAOS hardware this project hasn't had access to yet.
+> (`repository.yaml`, `hia/`) is built, and the real build (unreachable from this
+> dev machine's Docker Engine) has now succeeded on a real aarch64 HAOS install —
+> the repository, once private (blocking Supervisor from ever adding it as a
+> source at all), is now public. Not yet confirmed: whether the add-on actually
+> starts and runs after that build (s6-overlay/bashio/ingress) and the rest of the
+> exit criterion (appears in the sidebar, shows live state).
 
 ---
 
