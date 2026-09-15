@@ -21,6 +21,7 @@ progressively takes over automation decisions. Web UI for metrics and a digital 
 | [docs/03-learning.md](docs/03-learning.md) | Why naive RL fails here and what replaces it |
 | [docs/04-roadmap.md](docs/04-roadmap.md) | Phases, exit criteria, risks |
 | [docs/05-provenance.md](docs/05-provenance.md) | Automated reinforcement and the automation filter |
+| [docs/06-model-training.md](docs/06-model-training.md) | Concrete training plan: data pipeline, per-model specs, compute budget, evaluation |
 
 ## Non-negotiables
 

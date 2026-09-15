@@ -17,6 +17,7 @@ learning process and the model's reasoning visible.
 | [03-learning.md](docs/03-learning.md) | Why naive RL fails here, the three-tier reformulation, reward design, safety ladder, evaluation |
 | [04-roadmap.md](docs/04-roadmap.md) | Twelve phases with measurable exit criteria, critical path, risk register |
 | [05-provenance.md](docs/05-provenance.md) | Automated reinforcement, and the provenance filter that keeps automations out of the reward signal |
+| [06-model-training.md](docs/06-model-training.md) | The concrete training plan: data pipeline, per-model specs, compute budget, experiment tracking, evaluation |
 
 ## The short version
 

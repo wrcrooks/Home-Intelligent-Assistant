@@ -1,11 +1,12 @@
 # Handoff
 
-For an agent or developer picking this up cold. Written 2026-09-09.
+For an agent or developer picking this up cold. Written 2026-09-09, updated 2026-09-15
+to add [06-model-training.md](06-model-training.md).
 
 ## Where things stand
 
 **Design is complete. No code exists.** The repository contains this handoff, a
-`CLAUDE.md`, a README and five design documents. There is no `pyproject.toml`, no
+`CLAUDE.md`, a README and six design documents. There is no `pyproject.toml`, no
 package layout, no CI, no add-on manifest — P0 creates all of that from scratch.
 
 Nothing here has been validated against a running Home Assistant instance. The design
@@ -55,6 +56,11 @@ argument — but make the argument out loud.
 | 2D floorplan is source of truth, 3D is a view | One geometry model, not two that drift apart |
 | `amd64` + `aarch64` only | PyTorch on armv7 is poor and the hardware cannot train anything useful |
 | Add-on *and* Compose + HACS integration | Add-ons only exist on HA OS/Supervised; Container users are otherwise excluded |
+| GBTs (LightGBM) before neural nets for behaviour cloning | Small tabular data regime; upgrade only past ~6 months / 50k+ labelled transitions ([06-model-training.md](06-model-training.md) §2) |
+| Grey-box RC network before a learned thermal model | 10 days of data cannot identify a deep model; RC parameters are physically checkable and the twin needs to simulate forward, not just predict one step |
+| IQL on real logs is a check on the simulator, not primarily a deployed policy | If it disagrees sharply with the sim-trained policy, the twin is untrustworthy and nothing gets promoted |
+| MLflow in local file-store mode for experiment tracking | Local-only rules out cloud trackers; file mode needs no server process inside a resource-constrained add-on |
+| Splits are temporal, never k-fold/random | House data is autocorrelated at short lag; the goal is generalising forward in time, not backward |
 | Local only, no cloud | Privacy is the whole reason people self-host HA |
 
 ## Platform facts worth not re-deriving

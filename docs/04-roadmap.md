@@ -88,6 +88,8 @@ floorplan for a real home can be drawn in under 15 minutes.
 
 Behaviour cloning of occupant actions, occupancy/arrival prediction, per-zone thermal
 RC fitting with validation plots. All trained on provenance-filtered human actions.
+Concrete model choices, data floors and validation metrics are in
+[06-model-training.md](06-model-training.md) §1–2.
 
 **Exit:** BC beats a persistence baseline on next-action prediction, and the thermal
 model is under ~0.5 °C RMSE on a 6-hour horizon for the main living zones. Until this
@@ -117,7 +119,8 @@ audit of the decision log.
 Tier A decision points move `observe → suggest → act-with-undo` on a small opt-in entity
 set. Override attribution joins prediction agreement in the same reward pipeline.
 Actionable notifications via the custom component. Collision detection against
-automations that target the same entities.
+automations that target the same entities. Bandit algorithm, context-vector size and
+exploration policy are specified in [06-model-training.md](06-model-training.md) §2.
 
 **Exit:** on at least one decision point, a measurable fall in override rate versus the
 do-nothing and existing-automation baselines, over a four-week window.
@@ -131,7 +134,9 @@ it has still produced something worth running.
 
 `HouseEnv` over the twin. SAC/PPO in simulation, IQL/CQL on logged transitions. Offline
 policy evaluation harness. Model registry with promotion gates. Target: HVAC setpoints,
-water heater, tariff-aware load shifting.
+water heater, tariff-aware load shifting. Training loop, compute budget, offline-eval
+gate and the sim-vs-offline-RL disagreement check are specified in
+[06-model-training.md](06-model-training.md) §2–4.
 
 **Exit:** a sim-trained policy beats the schedule baseline in simulation *and* holds up
 in a two-week real A/B — energy down, no comfort regression, no rise in overrides.
