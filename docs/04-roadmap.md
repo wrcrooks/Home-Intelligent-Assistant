@@ -60,11 +60,11 @@ in the sidebar, and shows live state.
 > process; see docs/HANDOFF.md for why not a separate reader) and the frontend
 > (live entity view + data quality, served directly by `hia serve`) are both built
 > and verified live end-to-end, including in a real browser. Add-on packaging
-> (`repository.yaml`, `hia/`) is started but blocked: the repository is currently
-> private, and Supervisor adds an app repository the same way it clones any git
-> URL — unauthenticated. That means nobody, including the owner, can add this as
-> an add-on source while it stays private. A real decision for the repo owner, not
-> something to route around; see docs/HANDOFF.md. The exit criterion also needs
+> (`repository.yaml`, `hia/`) is built and verified running correctly inside the
+> real container — the repository, once private (blocking Supervisor from ever
+> adding it as a source at all), is now public. The one thing still unverified is
+> the real HA base image itself: this dev machine's Docker Engine can't pull it,
+> same limitation already hit on P0's HA Core image. The exit criterion also needs
 > real HAOS hardware this project hasn't had access to yet.
 
 ---

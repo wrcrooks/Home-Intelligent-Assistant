@@ -7,13 +7,14 @@ stand" for the latest.
 ## Where things stand
 
 **P0, P1 and P2's backend+frontend are done, all verified live** — including a real
-browser rendering real live updates against a real house. **P2's packaging is
-started but blocked on a real decision only the user can make: the repository is
-currently private, and Supervisor adds an add-on repository the same way it would
-clone any other git URL — unauthenticated.** A private repo cannot be added as an
-add-on source by anyone, including the owner, not just by this project's own build
-process. See the P2 packaging section below before doing anything else here — it's
-not a detail, it's a precondition for the roadmap's own exit criterion.
+browser rendering real live updates against a real house. **P2's packaging: the
+repository is now public** (the user's call, made after an audit found nothing
+sensitive in history) and the Docker build works end-to-end against a substitute
+base image, with the application actually running and serving correctly inside the
+built container — three real bugs found and fixed along the way (see the P2
+packaging section below). The one thing still unverified is the *real* HA base
+image specifically: this dev machine's Docker Engine can't pull it, the same
+limitation already documented for P0's HA Core image.
 
 ### P0 — the Home Assistant client
 
@@ -333,7 +334,7 @@ paths, not absolute ones.
 - The data-quality page polls every 10s rather than being push-driven; the live
   relay only carries `state_changed` events by design (docs/HANDOFF.md's P2 part 1).
 
-### P2, part 3 — add-on packaging (started, blocked on a real decision)
+### P2, part 3 — add-on packaging (built, verified except the real base image)
 
 `repository.yaml` (repo root) and `hia/` (config.yaml, Dockerfile, rootfs, DOCS.md,
 translations/en.yaml) exist. Layout was corrected mid-build after checking a real,
@@ -397,26 +398,68 @@ project's GitHub repository is **private**. That breaks two things, not one:
   first-class way to supply for a simple community add-on repo.
 
 This is a real decision about the repository's visibility, not a technical detail
-to route around — flagged to the user rather than resolved unilaterally. If/when
-the repo goes public, the Dockerfile's `git clone` step should just start working
-as written; nothing else changes.
+to route around — flagged to the user rather than resolved unilaterally.
+
+**Resolved**: the user made the repository public (audited first — full git
+history checked for the `.env` file, JWT-shaped tokens, the real HA hostname used
+in this same session's live verification, secret-shaped strings, and hardcoded
+private IPs; none found; the only personal data present is the standard git commit
+author email, which is normal for any public repo). Unauthenticated clone confirmed
+working immediately after.
+
+With that unblocked, three more real bugs turned up by actually building and
+*running* the image (not just building it) — exactly the kind of thing this
+project has repeatedly found only by testing:
+
+1. **`curl -LsSf ... | sh` silently no-ops if `curl` is missing.** `curl` exits
+   127, but its (empty) stdout still gets piped into `sh`, which exits 0 doing
+   nothing — a plain `sh -c "a | b"` only checks `b`'s exit code, so the whole
+   `RUN` reports success. `uv` was never actually installed; the failure only
+   surfaced later, confusingly, as `uv: not found`. Fixed by installing `curl`
+   explicitly (never assuming the base image has it) and downloading to a file
+   before running it, so a failed download actually fails the build.
+2. **`hatchling` (the backend's build backend) needs `README.md` physically
+   present** — `backend/pyproject.toml` declares `readme = "README.md"`, and
+   without it, building `hia`'s own package metadata fails outright. Added to the
+   early `COPY`.
+3. **The editable install of `hia` was created before `src/` was copied in** —
+   the first working *build* still produced a broken *image*:
+   `ModuleNotFoundError: No module named 'hia'` at runtime, caught only by
+   actually running the container and hitting `hia serve`, not by the build
+   succeeding. `uv sync` (which creates the editable install) now runs after
+   `src/` is copied, not before.
+
+**Verified by actually running the built image**, substituting a pullable image
+for the base-image stage only (the real `ghcr.io/home-assistant/base-debian` still
+can't be pulled on this dev machine — same known Docker Engine limitation, not
+re-litigated): `hia serve` started, connected (and correctly began reconnecting
+against a deliberately unreachable HA URL, exactly as designed), and served the
+real built frontend plus every REST endpoint (`/`, `/api/health`, `/api/entities`,
+`/api/data-quality`) correctly from inside the container. Also rebuilt for
+`linux/arm64` via QEMU emulation — succeeded cleanly, confirming DuckDB has a
+working manylinux wheel for aarch64 too, not just amd64.
+
+**Still unverified**: the real base image specifically (pull blocked by this dev
+machine's Docker Engine), and therefore whether s6-overlay actually invokes
+`rootfs/etc/services.d/hia/run` the way described — that script's own
+`bashio::config` calls need bashio, which only exists in the real base image, so
+it could not be exercised here at all.
 
 ## What to do next
 
-1. **Resolve the repository-visibility question above** before doing anything else
-   with add-on packaging — everything past this point assumes it's settled.
-2. Once resolved: get a real build of `hia/Dockerfile` (unsubstituted base image)
-   working — needs either a newer Docker Engine on a dev machine, or building
-   elsewhere (GitHub Actions runners don't have this project's local Docker Engine
-   version problem).
-3. **Run `hia serve` (not `hia ingest` — it supersedes it for normal operation)
+1. Get a real build of `hia/Dockerfile` against the *real* base image (not the
+   `python:3.13-slim` substitute) working — needs either a newer Docker Engine on
+   a dev machine, or building elsewhere (GitHub Actions runners don't have this
+   project's local Docker Engine version problem). This is what would finally
+   verify s6-overlay/bashio actually invoking the run script.
+2. **Run `hia serve` (not `hia ingest` — it supersedes it for normal operation)
    against a real house for 72+ hours, unattended**, to close out P0/P1's soak-test
    criteria for real — the one piece of verification no single session can
    complete honestly.
-4. Consider running `/run-skill-generator` to capture the Playwright-based
+3. Consider running `/run-skill-generator` to capture the Playwright-based
    screenshot verification path as a project skill, since it wasn't available
    out of the box this time.
-5. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
+4. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
    gaps worth closing, but neither blocks P2 — track them, don't let them stall
    forward progress.
 

@@ -47,19 +47,38 @@ RUN npm run build
 
 FROM ${BUILD_FROM}
 
-# uv manages its own pinned Python install rather than depending on a
-# base-python image variant existing (and being current) for every arch this
-# app targets -- the same tool already verified, on this project's own dev
-# machine, to fetch a standalone CPython build correctly.
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+# curl explicitly installed rather than assumed present on BUILD_FROM: a
+# `curl ... | sh` pipe with curl missing doesn't fail the RUN step at all --
+# curl exits 127, but sh receives its (empty) stdout, itself exits 0 doing
+# nothing, and a plain `sh -c "a | b"` only checks b's exit code -- so a
+# missing curl means uv silently never gets installed, discovered only later
+# (and confusingly) at `uv: not found`. Downloading to a file first, then
+# running it as a separate step, means a failed download actually fails the
+# build instead of silently no-op'ing.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -LsSf https://astral.sh/uv/install.sh -o /tmp/install-uv.sh
+RUN sh /tmp/install-uv.sh && rm /tmp/install-uv.sh
 ENV PATH="/root/.local/bin:${PATH}"
 
 WORKDIR /app/backend
-COPY --from=source /src/backend/pyproject.toml /src/backend/uv.lock /src/backend/.python-version ./
+# src/ copied in before `uv sync`, not after: `uv sync` creates an editable
+# install of hia itself, and hatchling's editable build needs src/hia to
+# actually exist at that point to capture it -- copying src/ afterward (the
+# first version of this Dockerfile did, for slightly better layer caching)
+# produced a venv where `import hia` failed outright at runtime, caught only
+# by actually running the built image, not by the build succeeding. README.md
+# is needed too: backend/pyproject.toml declares `readme = "README.md"`, and
+# hatchling refuses to build the package's own metadata at all without it
+# physically present.
+COPY --from=source \
+    /src/backend/pyproject.toml /src/backend/uv.lock /src/backend/.python-version \
+    /src/backend/README.md ./
+COPY --from=source /src/backend/src ./src
 RUN uv python install "$(cat .python-version)" \
     && uv sync --locked --no-dev
 
-COPY --from=source /src/backend/src ./src
 COPY --from=frontend-build /src/frontend/dist /app/frontend/dist
 
 COPY rootfs /
