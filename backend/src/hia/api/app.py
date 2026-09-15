@@ -15,6 +15,7 @@ from pathlib import Path
 
 import aiohttp
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
 
 from hia.api.ingress import RestrictToSupervisorMiddleware
 from hia.api.live import start_background_task, stop_background_task
@@ -89,5 +90,16 @@ def create_app(settings: Settings) -> FastAPI:
             pass
         finally:
             state.manager.disconnect(websocket)
+
+    # Registered last: Starlette matches routes in registration order, so the
+    # explicit /api/* operations above always take precedence over this catch-all.
+    # Mounted only if the frontend has actually been built — a fresh checkout
+    # before `npm run build`, or a backend-only dev session, should still run the
+    # API rather than fail to start.
+    frontend_dist = Path(settings.frontend_dist_dir)
+    if frontend_dist.is_dir():
+        app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+    else:
+        logger.info("frontend_not_built", looked_in=str(frontend_dist))
 
     return app

@@ -21,7 +21,7 @@ from hia.ingest.store import EventStore
 from tests.ingest.factories import make_state_changed_watched
 
 
-def _settings(data_dir: Path) -> Settings:
+def _settings(data_dir: Path, *, frontend_dist_dir: str | None = None) -> Settings:
     return Settings(
         _env_file=None,
         data_dir=str(data_dir),
@@ -29,6 +29,10 @@ def _settings(data_dir: Path) -> Settings:
         ha_token="unused",
         reconnect_initial_delay=0.01,
         reconnect_max_delay=0.02,
+        # A path that's guaranteed not to exist by default, so these tests never
+        # depend on whether `npm run build` happens to have been run on this
+        # machine — the frontend-mount behaviour itself is tested explicitly below.
+        frontend_dist_dir=frontend_dist_dir or "__no_frontend_dist_for_tests__",
     )
 
 
@@ -81,3 +85,30 @@ def test_serving_with_no_prior_data_starts_cleanly_with_an_empty_store(
         response = client.get("/api/entities")
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_frontend_not_mounted_when_not_built(tmp_path: Path) -> None:
+    """No frontend/dist yet (a fresh checkout, or a backend-only dev session) —
+    the API must still come up rather than fail to start."""
+    EventStore(tmp_path / "hia.duckdb").close()
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        health = client.get("/api/health")
+        root = client.get("/")
+    assert health.status_code == 200
+    assert root.status_code == 404
+
+
+def test_frontend_served_when_built(tmp_path: Path) -> None:
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<title>hia</title>", encoding="utf-8")
+    EventStore(tmp_path / "hia.duckdb").close()
+
+    with TestClient(create_app(_settings(tmp_path, frontend_dist_dir=str(dist)))) as client:
+        root = client.get("/")
+        health = client.get("/api/health")  # /api/* still takes precedence
+
+    assert root.status_code == 200
+    assert "hia" in root.text
+    assert health.status_code == 200
+    assert health.json() == {"status": "ok"}

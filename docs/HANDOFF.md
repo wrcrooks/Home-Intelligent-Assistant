@@ -6,10 +6,11 @@ stand" for the latest.
 
 ## Where things stand
 
-**P0 and P1 are done, both verified live. P2's backend (`hia serve`) is done and
-verified live too** — the frontend and add-on packaging halves of P2 are not started.
-The one thing genuinely left open from P0/P1 is the 72-hour unattended soak test,
-which no single session can complete honestly (see below).
+**P0, P1 and (almost all of) P2 are done, all verified live** — including the
+frontend now, end-to-end, in a real browser. Only add-on packaging (Dockerfile,
+`config.yaml`, s6-overlay) is left of P2, and it needs real HAOS hardware this
+project hasn't had access to, same caveat as the 72-hour unattended soak test that's
+still the one genuinely open item from P0/P1 (see below).
 
 ### P0 — the Home Assistant client
 
@@ -158,12 +159,12 @@ is-read-only check, correct context/attribute/old-state extraction, since/until
 filtering, and two "refuse to guess" paths — a missing required column, and a
 database that isn't a recorder database at all).
 
-### P2 — the backend (`hia serve`)
+### P2, part 1 — the backend (`hia serve`)
 
-Only the backend half of P2 — no frontend, no add-on packaging (Dockerfile,
-`config.yaml`, s6, ingress deployment) yet; those are what's left of P2's full exit
-criterion ("installs on real HA OS hardware, appears in the sidebar"), which also
-needs actual HAOS hardware this session doesn't have, same caveat as the soak test.
+No add-on packaging (Dockerfile, `config.yaml`, s6, ingress deployment) yet — what's
+left of P2's full exit criterion ("installs on real HA OS hardware, appears in the
+sidebar"), which also needs actual HAOS hardware this session doesn't have, same
+caveat as the soak test.
 
 **The single biggest finding this pass, and it changed the architecture.** The
 original plan (`02-architecture.md`, and how P1 was scoped) was: `hia ingest` writes,
@@ -257,25 +258,91 @@ combination. Documented in both test files' docstrings.
 42/42 tests passing (18 new across `tests/api/` and the one `hia.ha.client`
 regression test), ruff and mypy `--strict` both clean.
 
-**Explicitly not built, flagged rather than silently deferred:**
+**Explicitly not built in part 1, flagged rather than silently deferred:**
 
-- No frontend yet (Vite/React/Tailwind) — the rest of P2.
 - No add-on packaging (Dockerfile, `config.yaml`, s6-overlay, `repository.yaml`) —
-  also the rest of P2, and the only way to actually verify the full exit criterion
-  ("appears in the sidebar" needs real HAOS + Supervisor).
+  the only way to actually verify the full exit criterion ("appears in the
+  sidebar" needs real HAOS + Supervisor).
 - `Settings.data_dir` currently assumes one household's worth of data in one
   process; nothing here re-litigates that.
 
+### P2, part 2 — the frontend
+
+`frontend/` (new): React 18 + TypeScript + Vite + Tailwind v4, exactly P2's scoped
+UI per the roadmap — a live entity view and a data-quality page, not the fuller
+Overview/Twin/Decisions/Learning/Entities panels `02-architecture.md` describes for
+later phases (those need the governor/twin/training subsystems that don't exist
+yet). `npm run build` writes `frontend/dist`; `hia serve` mounts it as static files
+(new logic in `hia.api.app.create_app`, registered *after* the `/api/*` routes so
+they always take precedence, and skipped gracefully — logged, not a startup failure
+— when the directory doesn't exist, e.g. a fresh checkout or a backend-only dev
+session). One deployable unit, matching the add-on's one-container reality; no CORS
+to configure, since frontend and API share an origin.
+
+**Every URL the frontend calls is resolved relative to `document.baseURI`, never an
+absolute `/api/...` path** (`src/api.ts`, `vite.config.ts`'s `base: "./"`) — this
+project's now-standard posture of getting ingress-compatibility right by
+construction rather than by testing against real ingress, since there's still no
+real HAOS hardware to test it against. `src/entityStore.ts`'s `applyStateChanged` —
+merging one live `state_changed` message into the entity list, replacing an
+existing row or inserting a new one — is the one piece of real logic, and is
+unit-tested (Vitest) in isolation from the WebSocket/DOM.
+
+**Verified with a real headless browser, not just curl or the unit tests** —
+`chromium-cli` wasn't available in this environment, so `playwright`'s `chromium`
+was installed into an isolated scratch npm project (not added to `frontend/`'s own
+dependencies) and driven directly, per `run` skill's documented fallback for
+exactly this case:
+
+- Both pages screenshotted against a real `hia serve` with real dev-ha data:
+  entities table populated and correct, "Live" WebSocket-connected badge green,
+  data-quality stats matching what curl against `/api/data-quality` showed
+  independently.
+- **The actual live-push claim, proven, not assumed**: loaded the page, confirmed
+  `light.ceiling_lights` was absent from the rendered DOM, toggled it via HA's REST
+  API from *outside* the browser session entirely, and confirmed it appeared in the
+  table — correctly sorted, state and "just now" timestamp both correct — with zero
+  navigation or re-fetch triggered from the driving script. `console --errors`
+  equivalent (page console listener) was empty throughout.
+- This was **not out-of-the-box** — chromium-cli's absence meant installing
+  Playwright and writing a small driver script — which is exactly the signal the
+  `run` skill's own instructions say should be flagged for `/run-skill-generator`,
+  so a future session doesn't have to rediscover this path. Not run yet; flagged
+  here instead so it isn't lost.
+
+`npm audit` found 5 dev-dependency-only vulnerabilities (vitest/esbuild's dev-server
+request handling — affects `npm run dev`, not the production build or anything
+`hia serve` ships) immediately after `npm install`; fixed via `npm audit fix
+--force` (a vitest 4→5 major bump) before writing any application code, so nothing
+shipped was ever built against a known-vulnerable toolchain even transiently.
+
+4/4 frontend tests passing, eslint/tsc both clean, production build succeeds and
+its `dist/index.html` was confirmed to reference assets with relative (`./assets/...`)
+paths, not absolute ones.
+
+**Explicitly not built, flagged rather than silently deferred:**
+
+- No add-on packaging (Dockerfile, `config.yaml`, s6-overlay, `repository.yaml`) —
+  the last piece of P2, and the only way to verify the full exit criterion for real.
+- No React Router / client-side routing — the two-page UI uses local tab state, so
+  there's no SPA-fallback routing concern yet; revisit `StaticFiles(html=True)`'s
+  behaviour if/when that changes.
+- The data-quality page polls every 10s rather than being push-driven; the live
+  relay only carries `state_changed` events by design (docs/HANDOFF.md's P2 part 1).
+
 ## What to do next
 
-1. **Run `hia serve` (not `hia ingest` — it supersedes it for normal operation) 
+1. **Run `hia serve` (not `hia ingest` — it supersedes it for normal operation)
    against a real house for 72+ hours, unattended**, to close out P0/P1's soak-test
    criteria for real — the one piece of verification no single session can
    complete honestly.
-2. Finish **P2 in [04-roadmap.md](04-roadmap.md)**: the frontend, then add-on
-   packaging. The frontend can start against `hia serve`'s existing REST/WS surface
-   today; it doesn't need to wait for packaging.
-3. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
+2. Finish **P2 in [04-roadmap.md](04-roadmap.md)**: add-on packaging (Dockerfile,
+   `config.yaml`, s6-overlay, `repository.yaml`) is the only piece left, and needs
+   real HAOS hardware to actually verify against.
+3. Consider running `/run-skill-generator` to capture the Playwright-based
+   screenshot verification path as a project skill, since it wasn't available
+   out of the box this time.
+4. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
    gaps worth closing, but neither blocks P2 — track them, don't let them stall
    forward progress.
 
@@ -335,6 +402,9 @@ argument — but make the argument out loud.
 | `state_changes.context_id` nullable, `events.context_id` not | Backfill reads messier historical data (a few very old rows predate context tracking); live rows are guaranteed one by construction of the HA client |
 | `hia serve` owns ingestion itself, not a separate `hia ingest` process | DuckDB has no one-writer-plus-separate-readers mode at all — verified live on Linux, not assumed; see P2 section above and `hia.api.state` |
 | Raw ASGI middleware for the Supervisor-IP restriction, not `BaseHTTPMiddleware` | `BaseHTTPMiddleware` silently never sees `websocket`-scope connections — would have left the live relay completely unprotected on a real add-on |
+| Frontend resolves every URL relative to `document.baseURI`, never `/api/...` | Ingress serves the app from a runtime-assigned path prefix never known at build time; only relative resolution follows it automatically, and there's no real HAOS to catch an absolute-path mistake on |
+| `hia serve` mounts the built frontend itself (`StaticFiles`), not a separate static host | One deployable unit, matching the add-on's one-container reality; no CORS to configure since frontend and API share an origin |
+| P2 UI scoped to entities + data-quality only, not the full panel set | The fuller Overview/Twin/Decisions/Learning/Entities UI (`02-architecture.md`) depends on subsystems (governor, twin, training) that don't exist yet — building it now would mean building against nothing |
 
 ## Platform facts worth not re-deriving
 

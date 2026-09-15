@@ -5,12 +5,14 @@ behaves, builds a physical and behavioural model of the home from Home Assistant
 APIs, and progressively takes over automation decisions — with a web UI that makes the
 learning process and the model's reasoning visible.
 
-> **Status: P0/P1 complete; P2's backend complete.** The Home Assistant websocket
-> client, a DuckDB-backed event store with recorder backfill, and `hia serve` — the
-> process that ships in the add-on, owning the store outright to ingest, serve REST
-> reads, and relay live events over a WebSocket in one process — are built, tested,
-> and verified against real running HA instances. Next: the frontend and add-on
-> packaging. See [docs/HANDOFF.md](docs/HANDOFF.md) for exactly where things stand.
+> **Status: P0/P1 complete; P2 built.** The Home Assistant websocket client, a
+> DuckDB-backed event store with recorder backfill, `hia serve` (owns the store
+> outright — ingests, serves REST reads, relays live events over a WebSocket, all in
+> one process), and a React frontend (live entity view + data quality, served
+> directly by `hia serve`) are all built, tested, and verified end-to-end against
+> real running HA instances — including a real browser rendering the real live
+> updates. Next: add-on packaging (P2's last piece) and provenance (P3). See
+> [docs/HANDOFF.md](docs/HANDOFF.md) for exactly where things stand.
 
 ## Documents
 
@@ -27,9 +29,10 @@ learning process and the model's reasoning visible.
 ## Development
 
 The backend lives in `backend/` (Python 3.13, `uv`) — see
-[backend/README.md](backend/README.md) for setup, running `hia watch`, and the test
-suite. `compose/dev-ha/` spins up a throwaway Home Assistant instance to develop
-against.
+[backend/README.md](backend/README.md) for setup, running `hia serve`, and the test
+suite. The frontend lives in `frontend/` (React, TypeScript, Vite) — see
+[frontend/README.md](frontend/README.md). `compose/dev-ha/` spins up a throwaway
+Home Assistant instance to develop against.
 
 ## The short version
 

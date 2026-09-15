@@ -57,9 +57,11 @@ engineering for a house you cannot see.
 in the sidebar, and shows live state.
 
 > Status: the backend (`hia serve` — ingest + REST + live WebSocket relay, one
-> process; see docs/HANDOFF.md for why not a separate reader) is built and verified
-> live. The frontend and add-on packaging are not started; the exit criterion needs
-> both of those plus real HAOS hardware this project hasn't had access to yet.
+> process; see docs/HANDOFF.md for why not a separate reader) and the frontend
+> (live entity view + data quality, served directly by `hia serve`) are both built
+> and verified live end-to-end, including in a real browser. Only add-on packaging
+> is left, and the exit criterion needs it plus real HAOS hardware this project
+> hasn't had access to yet.
 
 ---
 

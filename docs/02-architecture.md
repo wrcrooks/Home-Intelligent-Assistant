@@ -186,12 +186,19 @@ Nothing reaches a service call without passing through here.
   separate reader alongside a standalone `hia ingest` — DuckDB does not support a
   read-write process coexisting with a separate read-only one (verified against a
   real Linux container; see docs/HANDOFF.md and `hia.api.state`'s module
-  docstring). Under ingress it must honour `X-Ingress-Path` for base-URL rewriting,
-  listen on the declared ingress port (default `8099`), and refuse HTTP *and*
-  WebSocket connections that do not originate from the Supervisor (`172.30.32.2`) —
-  built as a raw ASGI middleware, since Starlette's `BaseHTTPMiddleware` silently
-  never sees WebSocket-scope connections.
-- React + TypeScript + Vite + Tailwind (not started). Panels:
+  docstring). It also mounts the built frontend as static files (registered after
+  the `/api/*` routes, so those always take precedence) — one deployable unit,
+  no CORS to configure. Listens on the declared ingress port (default `8099`) and
+  refuses HTTP *and* WebSocket connections that do not originate from the
+  Supervisor (`172.30.32.2`) — built as a raw ASGI middleware, since Starlette's
+  `BaseHTTPMiddleware` silently never sees WebSocket-scope connections. Ingress
+  base-path correctness is handled entirely on the frontend side (below) rather
+  than via `X-Ingress-Path` here — this app serves no server-rendered links or
+  redirects that would need it, only a static SPA and a JSON API, both of which
+  the Supervisor already proxies at whatever path it stripped its own prefix from.
+- React + TypeScript + Vite + Tailwind v4 (P2's scope, built): a live entity view
+  and a data-quality page — not yet the fuller panel set below, which needs
+  subsystems (governor, twin, training) that don't exist yet:
   - **Overview** — autonomy state, today's decisions, reward components, alerts.
   - **Twin** — 2D floorplan (3D later) with live states, occupancy heat, predicted
     vs actual temperature, and the model's attention for the current decision.
@@ -200,6 +207,12 @@ Nothing reaches a service call without passing through here.
   - **Learning** — training curves, offline evaluation, baseline comparison, twin
     drift, data quality.
   - **Entities** — per-entity autonomy level, denylist, exploration budget.
+  Every URL the built frontend calls (REST and WebSocket alike) is resolved
+  relative to `document.baseURI`, never an absolute `/api/...` path — the ingress
+  prefix HA's Supervisor assigns at runtime is never known at build time, and only
+  relative resolution follows it automatically. Verified end-to-end with a real
+  headless browser against a real `hia serve` (docs/HANDOFF.md), including a live
+  update arriving with zero page reload.
 - 3D uses react-three-fiber, extruding the same 2D polygons. The 2D floorplan stays
   the source of truth; 3D is a view of it, never a second model.
 

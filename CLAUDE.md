@@ -9,20 +9,27 @@ An AI/ML companion add-on for Home Assistant. It learns how a household actually
 behaves from HA's APIs, builds a physical + behavioural model of the home, and
 progressively takes over automation decisions. Web UI for metrics and a digital twin.
 
-**Current state: P0, P1 complete; P2's backend complete.** `backend/` has the HA
-websocket client (P0), a DuckDB event store with recorder backfill (P1), and now
-`hia serve` (P2) — the process that ships in the add-on: it owns the event store
-outright (ingests, serves REST reads, relays live events over a WebSocket, all
-through one connection), because **DuckDB does not support a separate read-only
-reader alongside a read-write writer** — verified live on Linux, not assumed; see
-`hia.api.state`'s module docstring before designing anything that assumes otherwise.
-`hia ingest`/`hia backfill`/`hia data-quality` remain as standalone tools but must
-never run at the same time as `hia serve` against the same data directory. P2's
-frontend and add-on packaging are not started. The 72-hour unattended soak test is
-still outstanding — no single session can complete it honestly. See
-[docs/HANDOFF.md](docs/HANDOFF.md) for the detail, including a real reconnect bug in
-the P0 client found and fixed this pass (HA can interleave `event` messages with
-`subscribe_events` results across multiple pending subscriptions).
+**Current state: P0, P1, P2 built.** `backend/` has the HA websocket client (P0), a
+DuckDB event store with recorder backfill (P1), and `hia serve` (P2) — the process
+that ships in the add-on: it owns the event store outright (ingests, serves REST
+reads, relays live events over a WebSocket, all through one connection), because
+**DuckDB does not support a separate read-only reader alongside a read-write
+writer** — verified live on Linux, not assumed; see `hia.api.state`'s module
+docstring before designing anything that assumes otherwise. `hia
+ingest`/`hia backfill`/`hia data-quality` remain as standalone tools but must never
+run at the same time as `hia serve` against the same data directory. `frontend/`
+(React/TS/Vite) is a live entity view + data-quality page, served directly by `hia
+serve`; every URL it calls is resolved relative to `document.baseURI`, never an
+absolute `/api/...` path, so it survives being served from HA ingress's
+runtime-assigned path prefix. Verified with a real headless-browser screenshot of a
+live update arriving with no page reload, not just curl.
+
+Not started: add-on packaging (Dockerfile, `config.yaml`, s6) — the rest of P2 — and
+P3 (provenance classifier). The 72-hour unattended soak test is still outstanding —
+no single session can complete it honestly. See [docs/HANDOFF.md](docs/HANDOFF.md)
+for the detail, including a real reconnect bug in the P0 client found and fixed
+during P2 (HA can interleave `event` messages with `subscribe_events` results
+across multiple pending subscriptions).
 
 ## Read before designing anything
 

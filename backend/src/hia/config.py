@@ -93,6 +93,16 @@ class Settings(BaseSettings):
     (docs/HANDOFF.md platform facts) — not required, but means the add-on manifest
     won't need to override it later."""
 
+    frontend_dist_dir: str = "../frontend/dist"
+    """Where `hia serve` looks for the built frontend (`npm run build`'s output) to
+    mount as static files. The default is relative to backend/ (where `hia serve`
+    is conventionally run from in dev), resolving to frontend/dist at the repo
+    root. Add-on packaging (P10, not built yet) will set this explicitly for
+    wherever the Dockerfile copies the built assets to inside the container. If the
+    directory doesn't exist, `hia serve` logs that and runs API-only rather than
+    failing — a fresh checkout before `npm run build`, or a backend-only dev
+    session, shouldn't be an error."""
+
 
 def get_settings() -> Settings:
     """Load settings fresh from the environment.
