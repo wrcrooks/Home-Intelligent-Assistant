@@ -5,7 +5,10 @@ behaves, builds a physical and behavioural model of the home from Home Assistant
 APIs, and progressively takes over automation decisions — with a web UI that makes the
 learning process and the model's reasoning visible.
 
-> **Status: design phase.** No implementation yet. The documents below are the plan.
+> **Status: P0 underway.** The Home Assistant websocket client, registry sync and
+> `hia` CLI exist and are tested (`backend/`); nothing has been verified against a
+> real running HA instance yet. See [docs/HANDOFF.md](docs/HANDOFF.md) for exactly
+> where things stand.
 
 ## Documents
 
@@ -18,6 +21,13 @@ learning process and the model's reasoning visible.
 | [04-roadmap.md](docs/04-roadmap.md) | Twelve phases with measurable exit criteria, critical path, risk register |
 | [05-provenance.md](docs/05-provenance.md) | Automated reinforcement, and the provenance filter that keeps automations out of the reward signal |
 | [06-model-training.md](docs/06-model-training.md) | The concrete training plan: data pipeline, per-model specs, compute budget, experiment tracking, evaluation |
+
+## Development
+
+The backend lives in `backend/` (Python 3.13, `uv`) — see
+[backend/README.md](backend/README.md) for setup, running `hia watch`, and the test
+suite. `compose/dev-ha/` spins up a throwaway Home Assistant instance to develop
+against.
 
 ## The short version
 

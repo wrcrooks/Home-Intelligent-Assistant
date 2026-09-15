@@ -1,30 +1,71 @@
 # Handoff
 
 For an agent or developer picking this up cold. Written 2026-09-09, updated 2026-09-15
-to add [06-model-training.md](06-model-training.md).
+to add [06-model-training.md](06-model-training.md), updated again 2026-09-15 as P0
+got underway.
 
 ## Where things stand
 
-**Design is complete. No code exists.** The repository contains this handoff, a
-`CLAUDE.md`, a README and six design documents. There is no `pyproject.toml`, no
-package layout, no CI, no add-on manifest — P0 creates all of that from scratch.
+**P0 is in progress.** `backend/` (Python 3.13, managed with `uv`) now has:
 
-Nothing here has been validated against a running Home Assistant instance. The design
-rests on platform research (cited in the docs and summarised below), not on
-experiment. **Treat P0 partly as a verification exercise**: the first time this touches
-a real HA install, some assumptions will be wrong, and finding out early is cheap.
+- `hia.config` — settings via `pydantic-settings`, `HIA_`-prefixed env vars / `.env`.
+- `hia.logging` — structlog, JSON or console rendering.
+- `hia.ha.client.HomeAssistantClient` — the websocket client: auth handshake,
+  `subscribe_events`, automatic reconnect with backoff + jitter and resubscription,
+  a monotonic per-event sequence number that survives reconnects (so a consumer can
+  detect gaps), and a bounded internal queue so a slow consumer drops the newest
+  event and increments a counter rather than ever stalling the read loop.
+- `hia.ha.registry` — fetches entity/device/area/floor/label registries; floor/label
+  degrade to an empty list rather than failing if an older HA Core doesn't support
+  them.
+- `hia.cli` — the `hia` command: `watch`, `registry`, `check`.
+- A full test suite (`backend/tests/`) running against a fake in-process HA
+  websocket server (`tests/conftest.py`) that speaks the real protocol closely
+  enough to genuinely exercise auth failure, reconnect + resubscribe, the monotonic
+  seq/gap contract, and backpressure dropping — 8/8 passing, ruff and mypy (strict)
+  both clean, CI configured in `.github/workflows/ci.yml`.
+- `compose/dev-ha/` — a throwaway Home Assistant instance (`docker compose up -d`)
+  with the `demo` integration, for testing against something real.
+
+**What is *not* yet done, and is the actual remainder of P0's exit criterion:**
+running `uv run hia watch` against a genuinely live Home Assistant instance and
+restarting Core mid-stream to confirm it reconnects and keeps going. This was not
+completed this session because Docker Desktop wasn't running on the dev machine and
+starting it wasn't done unprompted — see `compose/dev-ha/docker-compose.yml` for the
+exact commands. The unit-test reconnect coverage is solid, but it is still a fake
+server; treat the real-instance check as outstanding until someone has actually run
+it.
+
+Nothing about the *design* has been validated against a running Home Assistant
+instance either — the WebSocket protocol details (auth handshake, `subscribe_events`,
+message-id rules, the five registry-list command names) were confirmed against HA's
+own developer docs before being implemented, but that's a documentation check, not a
+live one.
 
 ## What to do next
 
-Start at **P0 in [04-roadmap.md](04-roadmap.md)** — scaffolding plus the HA WebSocket
-client. It exists to prove the connection works and to give everything else a home.
-Its exit criterion is `uv run hia watch` streaming live state changes and surviving a
-Core restart.
+1. **Finish P0's real-instance check** (above) — the one piece of verification this
+   session couldn't complete.
+2. Move to **P1 in [04-roadmap.md](04-roadmap.md)**: event storage (DuckDB + Parquet)
+   and — critically — start capturing `context` fields and `automation_triggered` /
+   `call_service` on every event from day one, since that capture cannot be
+   retrofitted (see "Traps" in `CLAUDE.md`).
 
 Do not skip ahead to the interesting parts. P1 starts a data clock that cannot be
 rewound, and every model in the project is bottlenecked on how long it has been
 running. Getting ingestion live on the user's real house is worth more than any amount
 of early model work.
+
+## This dev machine has an RTX 3060
+
+Confirmed via `nvidia-smi` (driver 560.94, CUDA 12.6). This does **not** change the
+add-on's shipped CPU-only requirement (`CLAUDE.md`, `06-model-training.md`) — most real
+HA hosts have no GPU, and the add-on must run correctly without one. It does mean:
+model code from P4/P5 onward should resolve its device with the standard
+`torch.device("cuda" if torch.cuda.is_available() else "cpu")` pattern so local
+training iterates faster on this box, while remaining correct with no GPU present
+elsewhere. Nothing in P0 uses torch yet; this is a note for whoever writes the first
+Tier C model.
 
 ## How the design got here, in one paragraph
 

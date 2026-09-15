@@ -9,8 +9,12 @@ An AI/ML companion add-on for Home Assistant. It learns how a household actually
 behaves from HA's APIs, builds a physical + behavioural model of the home, and
 progressively takes over automation decisions. Web UI for metrics and a digital twin.
 
-**Current state: design complete, zero implementation.** The next task is P0 in
-[docs/04-roadmap.md](docs/04-roadmap.md).
+**Current state: P0 underway.** `backend/` has the package scaffold, the Home
+Assistant websocket client (auth, subscribe, reconnect + resubscribe, monotonic
+event sequence, bounded-queue backpressure), registry sync, and a `hia` CLI
+(`watch` / `registry` / `check`), all covered by tests and clean under ruff + mypy.
+Not yet verified against a real, running Home Assistant instance — see
+[docs/HANDOFF.md](docs/HANDOFF.md) for exactly what is and isn't done.
 
 ## Read before designing anything
 
@@ -64,7 +68,10 @@ explicitly and let the user decide.
 
 ## Conventions
 
-- Python 3.13, `uv`, ruff, mypy, pytest. CPU-only models — no CUDA assumptions.
+- Python 3.13, `uv`, ruff, mypy, pytest. The shipped add-on must run **CPU-only** —
+  most HA hosts have no GPU — but a training machine with CUDA (this project's dev
+  box has an RTX 3060) should be used opportunistically: `torch.device("cuda" if
+  torch.cuda.is_available() else "cpu")`, never a hard requirement.
 - Target `amd64` and `aarch64`. `armv7` is deliberately unsupported.
 - Under ingress: honour `X-Ingress-Path`, bind the declared ingress port, accept only
   `172.30.32.2`.

@@ -1,0 +1,26 @@
+# Throwaway Home Assistant instance for manual development testing — not the add-on,
+# not for a real house. Gives the backend something real to point at (with the
+# `demo` integration, so there's live-changing state without any physical devices)
+# for exercising things a fake test server can't: an actual TCP connection, a real
+# Core restart to verify the P0 reconnect exit criterion, real websocket framing.
+#
+# Usage:
+#   docker compose -f compose/dev-ha/docker-compose.yml up -d
+#   open http://localhost:8123, click through onboarding (any username/password —
+#     this instance is disposable), then Settings → your profile → Security →
+#     Long-Lived Access Tokens → Create Token, and put it in backend/.env.
+#
+# To exercise the P0 reconnect exit criterion:
+#   docker compose -f compose/dev-ha/docker-compose.yml restart homeassistant
+#   # `uv run hia watch` should log ha_disconnected, then ha_connected (resumed=true),
+#   # and keep streaming — never exit.
+
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: hia-dev-ha
+    volumes:
+      - ./config:/config
+    ports:
+      - "8123:8123"
+    restart: unless-stopped

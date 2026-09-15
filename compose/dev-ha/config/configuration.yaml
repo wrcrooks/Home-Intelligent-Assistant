@@ -1,0 +1,6 @@
+# Minimal config for a throwaway dev instance. `demo:` populates a set of fake
+# entities (lights, climate, sensors, media players, ...) whose state actually
+# changes on its own, which is more useful for testing the event stream than an
+# empty house would be.
+default_config:
+demo:
