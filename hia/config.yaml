@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/apps/configuration
 name: Home Intelligent Assistant
-version: "0.1.0"
+version: "0.1.1"
 slug: hia
 description: >-
   Learns how your household behaves from Home Assistant's own data and

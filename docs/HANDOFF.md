@@ -489,11 +489,36 @@ forever). Verified by actually rebuilding and checking inside the image
 (`ls -la /etc/services.d/hia/` → `-rwxr-xr-x` on both, where it was `-rw-r--r--`
 before) — not just trusting the `chmod` line was in the Dockerfile.
 
-**This means the version the user has already installed still has the bug** — it
-needs an add-on rebuild/update once this fix is pushed and pulled. Once rebuilt,
-whether `hia serve` actually comes up and is reachable through ingress is still
-the next thing to confirm; permission-denied is what was blocking that
-observation, not evidence either way about what happens once `run` can execute.
+**That fix did not reach the user** — reinstalling the add-on (which clears its
+`/data`, not Supervisor's underlying Docker build cache) and clicking "Rebuild"
+several times still showed the identical `Permission denied` log. Root-caused, not
+guessed: `hia/Dockerfile`'s clone step (`RUN git clone --depth 1 --branch main
+https://github.com/...`) is one `RUN` instruction whose *text* never changes
+between builds — Docker/BuildKit caches `RUN` steps by instruction text, not by
+whatever the remote branch currently points to. So every subsequent build,
+however triggered, kept reusing the very first cached clone from this add-on's
+first successful build (before the chmod fix even existed), regardless of what
+had since been pushed to GitHub.
+
+Verified by deliberately reproducing it locally before trusting the fix: built
+once (fresh clone), rebuilt again unchanged (`git clone` step showed `CACHED` —
+the exact bug), then rebuilt a third time after bumping a new `CACHE_BUST` build
+arg (`git clone` step actually re-ran, no `CACHED`). Fixed by adding
+`ARG CACHE_BUST` to `hia/Dockerfile`, referenced inside the clone `RUN`
+instruction's own text — bumped every time a real fix needs to actually reach a
+build from now on, not just pushed to `main` and hoped for. Also bumped
+`config.yaml`'s `version` (0.1.0 → 0.1.1), which had never been touched despite
+several real fixes shipping — Supervisor uses it to signal an update is available
+at all, so leaving it unchanged may also have contributed to the user not
+getting a fresh build offered.
+
+**Once this reaches the user (needs both a repository-level refresh — Settings →
+Add-ons → Add-on Store → check for updates/reload — and then rebuilding the
+add-on itself, not just "Rebuild" on its own, in case the repository-level cache
+was also involved)**, whether `hia serve` actually comes up and is reachable
+through ingress is still the next thing to confirm — permission-denied is what
+was blocking that observation, not evidence either way about what happens once
+`run` can actually execute.
 
 ## What to do next
 

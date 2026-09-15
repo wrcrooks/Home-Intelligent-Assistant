@@ -17,6 +17,20 @@
 # declaring BUILD_FROM further down, right before the FROM that uses it,
 # reliably fails with "base name should not be blank".
 ARG BUILD_REF=main
+
+# Bump this every time a real fix needs to actually reach a build. `git clone
+# --branch main` is one RUN instruction whose *text* never changes between
+# builds, and Docker/BuildKit caches RUN steps by instruction text, not by
+# whatever the remote branch currently points to -- so without something like
+# this, a real, pushed, correct fix can be silently ignored by every
+# subsequent build forever, regardless of "Rebuild" clicks or even a full
+# add-on reinstall (reinstalling clears the add-on's own /data, not
+# Supervisor's underlying Docker build cache). This is not hypothetical: it is
+# exactly what happened with the run/finish executable-bit fix -- confirmed
+# correct in the repository, and still absent from the built image after
+# several rebuilds and a reinstall, until this counter existed to force the
+# clone step to actually re-run. See docs/HANDOFF.md.
+ARG CACHE_BUST=1
 # Explicit default rather than relying on Supervisor-injected BUILD_FROM --
 # since Supervisor 2026.04.0, that's only provided when a build.yaml exists,
 # and this app deliberately doesn't have one (a per-arch build.yaml would add
@@ -34,10 +48,15 @@ ARG BUILD_FROM=ghcr.io/home-assistant/base-debian:bookworm
 
 FROM node:24-slim AS source
 ARG BUILD_REF
+ARG CACHE_BUST
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 --branch "${BUILD_REF}" \
+# CACHE_BUST is otherwise unused -- its only job is to appear in this
+# instruction's text so that bumping it forces Docker to actually re-run the
+# clone instead of reusing a cached checkout from before the bump.
+RUN echo "cache_bust=${CACHE_BUST}" \
+    && git clone --depth 1 --branch "${BUILD_REF}" \
     https://github.com/wrcrooks/Home-Intelligent-Assistant.git /src
 
 FROM source AS frontend-build
