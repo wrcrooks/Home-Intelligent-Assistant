@@ -1,0 +1,19 @@
+#!/usr/bin/env bashio
+# ==============================================================================
+# Halts the s6 supervision tree if hia serve exits with a real error, rather
+# than leaving the container running with the service dead -- the same
+# "if the container dies, the house must stay sane" posture from
+# docs/01-scope.md, applied to the container's own supervision, not just
+# hia's connection to Home Assistant.
+# s6-overlay docs: https://github.com/just-containers/s6-overlay
+# ==============================================================================
+
+declare EXIT_CODE=${1}
+
+if [[ "${EXIT_CODE}" -ne 0 ]] && [[ "${EXIT_CODE}" -ne 256 ]]; then
+  bashio::log.warning "hia serve exited with code ${EXIT_CODE}, halting"
+  echo "${EXIT_CODE}" > /run/s6-linux-init-container-results/exitcode
+  exec /run/s6/basedir/bin/halt
+fi
+
+bashio::log.info "hia serve stopped for restart"

@@ -6,11 +6,14 @@ stand" for the latest.
 
 ## Where things stand
 
-**P0, P1 and (almost all of) P2 are done, all verified live** — including the
-frontend now, end-to-end, in a real browser. Only add-on packaging (Dockerfile,
-`config.yaml`, s6-overlay) is left of P2, and it needs real HAOS hardware this
-project hasn't had access to, same caveat as the 72-hour unattended soak test that's
-still the one genuinely open item from P0/P1 (see below).
+**P0, P1 and P2's backend+frontend are done, all verified live** — including a real
+browser rendering real live updates against a real house. **P2's packaging is
+started but blocked on a real decision only the user can make: the repository is
+currently private, and Supervisor adds an add-on repository the same way it would
+clone any other git URL — unauthenticated.** A private repo cannot be added as an
+add-on source by anyone, including the owner, not just by this project's own build
+process. See the P2 packaging section below before doing anything else here — it's
+not a detail, it's a precondition for the roadmap's own exit criterion.
 
 ### P0 — the Home Assistant client
 
@@ -330,19 +333,90 @@ paths, not absolute ones.
 - The data-quality page polls every 10s rather than being push-driven; the live
   relay only carries `state_changed` events by design (docs/HANDOFF.md's P2 part 1).
 
+### P2, part 3 — add-on packaging (started, blocked on a real decision)
+
+`repository.yaml` (repo root) and `hia/` (config.yaml, Dockerfile, rootfs, DOCS.md,
+translations/en.yaml) exist. Layout was corrected mid-build after checking a real,
+current official example (`home-assistant/apps-example` on GitHub, fetched
+directly — not assumed from memory): `repository.yaml` and each app's folder sit
+flat at the **repository root**, not nested under an `addon/` parent the way this
+project's own `02-architecture.md` originally sketched — Supervisor's app-discovery
+convention doesn't support that nesting.
+
+**Three real things were figured out or fixed here, worth not re-deriving:**
+
+1. **Supervisor always uses the app's own folder as the Docker build context** —
+   confirmed by reading Supervisor's actual source
+   (`supervisor/apps/build.py`: `docker buildx build .` with this directory
+   bind-mounted at `/addon`), not assumed. A Dockerfile in `hia/` genuinely cannot
+   `COPY` from `../backend` or `../frontend`, even though they're right there in
+   the same repo. `hia/Dockerfile` works around this with a build stage that
+   clones this repository's own source (`git clone --branch main
+   https://github.com/wrcrooks/Home-Intelligent-Assistant.git`) rather than
+   assuming co-location — see the Dockerfile's own header comment for the
+   alternatives considered (restructuring the whole repo under `hia/`; a
+   committed-copy sync step) and why this one was chosen.
+2. **DuckDB has no musllinux (Alpine) wheel on PyPI**, and needs a full C++
+   toolchain (CMake, g++) to build from source — verified directly, not assumed:
+   ran `uv sync --locked` for this exact lockfile inside `python:3.13-alpine`
+   (failed, `CMAKE_CXX_COMPILER not set`) and inside `python:3.13-slim`
+   (glibc/Debian; succeeded cleanly, all 41 packages as prebuilt wheels). This
+   ruled out `ghcr.io/home-assistant/base` (Alpine) as the add-on's base image —
+   `hia/Dockerfile` uses `ghcr.io/home-assistant/base-debian:bookworm` instead.
+   Given how central DuckDB is to this whole project, this was worth actually
+   testing rather than trusting the "should be fine" instinct.
+3. **Dockerfile ARG scoping**: an `ARG` used in a later `FROM` line must be
+   declared before the *first* `FROM` in the file, not just before the `FROM` that
+   uses it — declaring it in between stages reliably fails with "base name should
+   not be blank". Both `BUILD_REF` and `BUILD_FROM` now sit at the top of
+   `hia/Dockerfile` for this reason.
+
+**None of the actual HA-published base images could be pulled and built on this
+dev machine** — same root cause as P0's `ghcr.io/home-assistant/home-assistant`
+finding (`archive/tar: invalid tar header`, this dev machine's Docker Engine
+20.10.21 against recently-built image layers), now confirmed to affect
+`ghcr.io/home-assistant/base`, `base-debian:trixie`, and every tag back through
+`base-debian:bookworm-2026.03.1` — the registry doesn't retain tags old enough to
+route around it the way `home-assistant/home-assistant:2024.6.0` did for P0. The
+Dockerfile's *structure* (multi-stage clone → frontend build → backend
+install → copy) was still validated end-to-end by substituting a pullable image
+(`--build-arg BUILD_FROM=python:3.13-slim`) for the base-image stage only — this
+caught the private-repo blocker below — but the real base image, and therefore
+s6-overlay/bashio actually starting the service, remain unverified. Needs either a
+Docker Engine update on this machine, or verification elsewhere.
+
+**The actual blocker**: building with the real `git clone` step failed with
+`could not read Username for 'https://github.com'` — not a bug, a discovery. This
+project's GitHub repository is **private**. That breaks two things, not one:
+
+- The Dockerfile's own clone-based build (above).
+- **Home Assistant's Supervisor adding this repository as an add-on source at
+  all** — "Add repository" in the Supervisor UI clones the given URL the same
+  unauthenticated way. A private repo cannot be added by *anyone*, including the
+  owner, without separately configuring git credentials Supervisor doesn't have a
+  first-class way to supply for a simple community add-on repo.
+
+This is a real decision about the repository's visibility, not a technical detail
+to route around — flagged to the user rather than resolved unilaterally. If/when
+the repo goes public, the Dockerfile's `git clone` step should just start working
+as written; nothing else changes.
+
 ## What to do next
 
-1. **Run `hia serve` (not `hia ingest` — it supersedes it for normal operation)
+1. **Resolve the repository-visibility question above** before doing anything else
+   with add-on packaging — everything past this point assumes it's settled.
+2. Once resolved: get a real build of `hia/Dockerfile` (unsubstituted base image)
+   working — needs either a newer Docker Engine on a dev machine, or building
+   elsewhere (GitHub Actions runners don't have this project's local Docker Engine
+   version problem).
+3. **Run `hia serve` (not `hia ingest` — it supersedes it for normal operation)
    against a real house for 72+ hours, unattended**, to close out P0/P1's soak-test
    criteria for real — the one piece of verification no single session can
    complete honestly.
-2. Finish **P2 in [04-roadmap.md](04-roadmap.md)**: add-on packaging (Dockerfile,
-   `config.yaml`, s6-overlay, `repository.yaml`) is the only piece left, and needs
-   real HAOS hardware to actually verify against.
-3. Consider running `/run-skill-generator` to capture the Playwright-based
+4. Consider running `/run-skill-generator` to capture the Playwright-based
    screenshot verification path as a project skill, since it wasn't available
    out of the box this time.
-4. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
+5. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
    gaps worth closing, but neither blocks P2 — track them, don't let them stall
    forward progress.
 
@@ -405,6 +479,9 @@ argument — but make the argument out loud.
 | Frontend resolves every URL relative to `document.baseURI`, never `/api/...` | Ingress serves the app from a runtime-assigned path prefix never known at build time; only relative resolution follows it automatically, and there's no real HAOS to catch an absolute-path mistake on |
 | `hia serve` mounts the built frontend itself (`StaticFiles`), not a separate static host | One deployable unit, matching the add-on's one-container reality; no CORS to configure since frontend and API share an origin |
 | P2 UI scoped to entities + data-quality only, not the full panel set | The fuller Overview/Twin/Decisions/Learning/Entities UI (`02-architecture.md`) depends on subsystems (governor, twin, training) that don't exist yet — building it now would mean building against nothing |
+| `hia/Dockerfile` clones this repo's own source rather than referencing sibling dirs | Supervisor always uses the app's own folder as the Docker build context (confirmed from Supervisor's own source) — a Dockerfile in `hia/` cannot `COPY ../backend` no matter how the rest of the repo is laid out |
+| `base-debian`, not `base` (Alpine), for the add-on's base image | DuckDB has no musllinux wheel and needs a full C++ toolchain to build from source — verified directly by running `uv sync` inside both, not assumed |
+| `repository.yaml` and `hia/` flat at the repo root, not under `addon/` | Matches a real, current official example fetched directly; Supervisor's app-discovery convention doesn't support the nesting this project originally sketched |
 
 ## Platform facts worth not re-deriving
 

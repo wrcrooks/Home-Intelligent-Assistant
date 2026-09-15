@@ -5,13 +5,15 @@ behaves, builds a physical and behavioural model of the home from Home Assistant
 APIs, and progressively takes over automation decisions — with a web UI that makes the
 learning process and the model's reasoning visible.
 
-> **Status: P0/P1 complete; P2 built.** The Home Assistant websocket client, a
-> DuckDB-backed event store with recorder backfill, `hia serve` (owns the store
-> outright — ingests, serves REST reads, relays live events over a WebSocket, all in
-> one process), and a React frontend (live entity view + data quality, served
-> directly by `hia serve`) are all built, tested, and verified end-to-end against
-> real running HA instances — including a real browser rendering the real live
-> updates. Next: add-on packaging (P2's last piece) and provenance (P3). See
+> **Status: P0/P1 complete; P2's app + frontend complete.** The Home Assistant
+> websocket client, a DuckDB-backed event store with recorder backfill, `hia serve`
+> (owns the store outright — ingests, serves REST reads, relays live events over a
+> WebSocket, all in one process), and a React frontend (live entity view + data
+> quality, served directly by `hia serve`) are all built, tested, and verified
+> end-to-end against real running HA instances — including a real browser rendering
+> real live updates. **Add-on packaging is started but blocked**: this repository is
+> currently private, which means Home Assistant's Supervisor can't add it as an
+> add-on source at all — not a technical detail, a decision for the repo owner. See
 > [docs/HANDOFF.md](docs/HANDOFF.md) for exactly where things stand.
 
 ## Documents

@@ -24,11 +24,15 @@ absolute `/api/...` path, so it survives being served from HA ingress's
 runtime-assigned path prefix. Verified with a real headless-browser screenshot of a
 live update arriving with no page reload, not just curl.
 
-Not started: add-on packaging (Dockerfile, `config.yaml`, s6) — the rest of P2 — and
-P3 (provenance classifier). The 72-hour unattended soak test is still outstanding —
-no single session can complete it honestly. See [docs/HANDOFF.md](docs/HANDOFF.md)
-for the detail, including a real reconnect bug in the P0 client found and fixed
-during P2 (HA can interleave `event` messages with `subscribe_events` results
+**Add-on packaging (`repository.yaml`, `hia/`) is started but blocked**: the
+repository is currently private, and Supervisor adds an app repository the same way
+it would clone any git URL — unauthenticated. A private repo can't be added by
+anyone, including the owner. That's a call for the user, not something to route
+around. P3 (provenance classifier) hasn't started. The 72-hour unattended soak test
+is still outstanding — no single session can complete it honestly. See
+[docs/HANDOFF.md](docs/HANDOFF.md) for the detail, including a real reconnect bug
+in the P0 client found and fixed during P2 (HA can interleave `event` messages with
+`subscribe_events` results
 across multiple pending subscriptions).
 
 ## Read before designing anything

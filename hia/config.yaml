@@ -1,0 +1,47 @@
+# https://developers.home-assistant.io/docs/apps/configuration
+name: Home Intelligent Assistant
+version: "0.1.0"
+slug: hia
+description: >-
+  Learns how your household behaves from Home Assistant's own data and
+  progressively takes over automation decisions, with a web UI to watch it
+  happen.
+url: "https://github.com/wrcrooks/Home-Intelligent-Assistant"
+arch:
+  - amd64
+  - aarch64
+# armv7 deliberately unsupported -- PyTorch support is poor there and the
+# hardware can't train anything useful (docs/01-scope.md).
+
+init: false
+startup: services
+boot: auto
+timeout: 30
+
+# hia serve is the whole app: it owns the event store, ingests, serves REST +
+# a live WebSocket, and now the frontend too (docs/HANDOFF.md P2).
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:home-assistant
+panel_title: Home Intelligent Assistant
+
+# Grants SUPERVISOR_TOKEN, which is how hia.config.Settings.is_addon detects
+# it's running as an add-on (and, from that, defaults log_json to true).
+# Deliberately *not* requesting homeassistant_api: connecting via the
+# Supervisor's ws://supervisor/core/websocket proxy would mean zero-config
+# onboarding, but hia.ha.client.websocket_url() currently assumes the direct
+# <host>:8123/api/websocket path shape, and there is no real Supervisor in
+# this project's dev loop to verify the proxy path against. The already-
+# verified path -- a user-supplied URL and long-lived token, below -- ships
+# instead. See docs/HANDOFF.md for the reasoning, so this isn't re-litigated
+# by accident.
+hassio_api: true
+
+options:
+  ha_url: "http://homeassistant:8123"
+  ha_token: ""
+  log_level: "info"
+schema:
+  ha_url: "url"
+  ha_token: "password"
+  log_level: "list(debug|info|warning|error)"

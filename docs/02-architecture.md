@@ -230,17 +230,25 @@ Nothing reaches a service call without passing through here.
 ## Repository layout
 
 ```
-addon/
-  hia/                config.yaml, Dockerfile, build.yaml, s6 rootfs, translations
-  repository.yaml
+repository.yaml        add-on repository manifest (repo root -- required location)
+hia/                    the add-on itself (built, P2 part 3): config.yaml,
+                        Dockerfile, rootfs (s6 services), translations, DOCS.md
 custom_components/hia/
 backend/src/hia/
   ha/  ingest/  provenance/  features/  twin/  envs/  policies/  governor/  train/  api/  cli.py
 frontend/             vite + react + ts
 docs/
-tests/
-compose.yaml          standalone (non-add-on) deployment
+compose/dev-ha/       throwaway HA instance for development
 ```
+
+`repository.yaml` and `hia/` sit flat at the repo root, not nested under an
+`addon/` parent as earlier drafts of this doc sketched — corrected against a real,
+current official example (`home-assistant/apps-example`) once the add-on was
+actually built: Supervisor's app-discovery convention doesn't support that
+nesting, and (confirmed by reading Supervisor's own source,
+`supervisor/apps/build.py`) always uses the app's own folder as the Docker build
+context, which is why `hia/Dockerfile` clones this repo's own source rather than
+referencing `../backend`/`../frontend` directly — see docs/HANDOFF.md.
 
 ## Stack
 

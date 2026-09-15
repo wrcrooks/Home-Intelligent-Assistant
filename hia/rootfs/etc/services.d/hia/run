@@ -1,0 +1,25 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Starts hia serve. Home Assistant connection settings and the log level come
+# from this app's own Configuration tab (bashio::config reads
+# /data/options.json, per config.yaml's options/schema); everything else uses
+# hia's own defaults, appropriate for running inside this container
+# (hia.config.Settings, docs/HANDOFF.md).
+# ==============================================================================
+
+export HIA_HA_URL
+export HIA_HA_TOKEN
+export HIA_LOG_LEVEL
+export HIA_DATA_DIR="/data"
+export HIA_FRONTEND_DIST_DIR="/app/frontend/dist"
+
+HIA_HA_URL="$(bashio::config 'ha_url')"
+HIA_HA_TOKEN="$(bashio::config 'ha_token')"
+HIA_LOG_LEVEL="$(bashio::config 'log_level')"
+
+bashio::log.info "Starting hia serve..."
+# The venv's own binary directly, not `uv run hia serve` -- uv sync --locked
+# already built it at image-build time, so there is nothing left to resolve,
+# and this avoids `uv run` doing any of its own freshness checking at
+# container start for no benefit.
+exec /app/backend/.venv/bin/hia serve

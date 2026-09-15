@@ -1,0 +1,15 @@
+configuration:
+  ha_url:
+    name: Home Assistant URL
+    description: >-
+      The URL hia connects to. The default (http://homeassistant:8123) works
+      for most installs, since this add-on runs on the same host as Home
+      Assistant.
+  ha_token:
+    name: Long-lived access token
+    description: >-
+      Create one from your Home Assistant profile: click your name (bottom
+      left) -> Security -> Long-Lived Access Tokens -> Create Token.
+  log_level:
+    name: Log level
+    description: How much hia logs. "info" is right for normal use.

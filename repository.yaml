@@ -1,0 +1,7 @@
+# https://developers.home-assistant.io/docs/apps/repository
+# Lets a user add this repo directly as an add-on source in Home Assistant
+# (Settings -> Add-ons -> Add-on Store -> ⋮ -> Repositories). hia/ is the one
+# app this repository publishes; more could be added as siblings later.
+name: Home Intelligent Assistant
+url: "https://github.com/wrcrooks/Home-Intelligent-Assistant"
+maintainer: Will Crooks
