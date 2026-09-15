@@ -22,13 +22,20 @@ throwaway instance in `../compose/dev-ha/` if you don't want to use a real house
 ## Running it
 
 ```sh
-uv run hia check      # connect, authenticate, disconnect — confirms config is right
-uv run hia watch       # stream live state_changed events to stdout until Ctrl-C
-uv run hia registry    # dump the entity/device/area/floor/label registries as JSON
+uv run hia check           # connect, authenticate, disconnect — confirms config is right
+uv run hia watch           # stream live state_changed events to stdout until Ctrl-C
+uv run hia registry        # dump the entity/device/area/floor/label registries as JSON
+uv run hia ingest          # like watch, but persisted into the DuckDB event store
+uv run hia backfill \
+  --db-path /path/to/home-assistant_v2.db   # read-only; SQLite only for now
+uv run hia data-quality    # report on what's in the event store
 ```
 
-`watch` is P0's exit criterion (docs/04-roadmap.md): it should keep streaming across
-a Home Assistant Core restart, reconnecting and resubscribing on its own.
+`watch`/`ingest` are P0/P1's reconnect exit criterion (docs/04-roadmap.md): they
+should keep streaming across a Home Assistant Core restart, reconnecting and
+resubscribing on their own. `ingest` writes to `{HIA_DATA_DIR}/hia.duckdb`
+(default `./.data/hia.duckdb`, gitignored); `backfill` writes into the same file.
+`--db-path` defaults to `HIA_RECORDER_DB_PATH` if set.
 
 ## Checks
 

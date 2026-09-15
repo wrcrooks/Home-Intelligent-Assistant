@@ -71,8 +71,14 @@ flowchart TB
   and anything else, interpreted later by provenance). Built in P1; see
   docs/HANDOFF.md for the concrete schema.
 - Backfill replays recorder history into the same schema, so live and historical
-  data are indistinguishable downstream. (Not yet built as of P1's first slice —
-  live ingestion landed first because it starts a clock that backfill doesn't.)
+  data are indistinguishable downstream. Built in P1 (after live ingestion, which
+  landed first because it starts a clock that backfill doesn't): SQLite only and
+  verified against a real recorder database; MariaDB/Postgres should work through
+  the same SQLAlchemy-based reader but are unverified. Detects the schema it's
+  reading by checking required columns exist rather than trusting a hardcoded
+  `schema_version` cutoff — see docs/HANDOFF.md. Not yet read: the
+  `statistics`/`statistics_short_term` tables, or de-duplication against a time
+  range live ingestion already covered.
 - Data quality report: entities with no history, sensors that flap, units that
   change mid-series, gaps in the stream. V1 (P1) covers no-history/stale entities and
   gap detection via the reconnect flag every row carries; flapping/unit-change

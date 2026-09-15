@@ -6,8 +6,9 @@ stand" for the latest.
 
 ## Where things stand
 
-**P0 is done, verified live. P1 is partly done** — live ingestion + storage is built,
-tested, and verified live; recorder backfill (the other half of P1) is not started.
+**P0 and P1 are both done, both verified live.** The one thing genuinely left open is
+the 72-hour unattended soak test, which no single session can complete honestly (see
+below) — everything buildable in one sitting is built.
 
 ### P0 — the Home Assistant client
 
@@ -104,33 +105,72 @@ demonstration of exactly the context-chain linkage the provenance classifier's L
 (P3) depends on. `hia data-quality` correctly reported the 2 state_changes / 3 events
 split. Instance torn down afterward as usual.
 
-**Not done, and explicitly deferred rather than attempted this pass:**
+### P1, part 2 — recorder backfill
 
-- **Recorder backfill** (reading `states`/`states_meta`/`statistics` from HA's own
-  recorder DB with `schema_version` detection) — the other half of P1's roadmap
-  entry. Live ingestion was built first because it's the piece that starts a clock
-  (see below); backfill matters but doesn't get more expensive by waiting a bit.
-- **The 72-hour-without-a-gap soak test.** Not something a single session can
-  complete honestly. `hia ingest` is built to run indefinitely and reconnect through
-  anything; actually running it for 72 hours is on whoever has a real house pointed
-  at this next.
+`hia.ingest.backfill` reads Home Assistant's own recorder database — **read-only,
+always**, enforced by SQLite's own URI `mode=ro` (verified: there's a test that
+opens the same read-only connection this module uses and asserts an `INSERT`
+actually raises `OperationalError`, not just a docstring promise) — and writes into
+the *same* `state_changes` table the live writer uses, tagged `source="backfill"`.
+
+The recorder schema has moved a lot over HA's history (`states_meta` normalisation,
+epoch-float `*_ts` columns replacing datetime ones, binary ULID/UUID-encoded context
+columns replacing string ones). Rather than trust a hardcoded `schema_version >= N`
+cutoff — getting N exactly right is its own research problem, and being wrong about
+it fails silently — the reader checks that the specific columns it needs actually
+exist (via SQLAlchemy reflection) and raises a clear, named-column error if not.
+Context binary columns are decoded with `ulid-transform`, the same PyPI package HA's
+own recorder uses, specifically so a backfilled `context_id` is byte-for-byte the
+same string a live-captured row for the same event would have had — without that,
+provenance's context-chain matching (`05-provenance.md` §3) would silently fail to
+join backfilled history to anything.
+
+**Verified against the real dev-ha recorder database**, not just synthetic fixtures:
+ran `hia backfill --db-path compose/dev-ha/config/home-assistant_v2.db` after
+generating real light-toggle activity. Result: 116/116 rows had a non-null
+`context_id`; the toggled-light rows showed the correct `old_state` (via the
+`old_state_id` self-join), full real attribute JSON (via the `state_attributes`
+join), and a `context_user_id` matching the exact account that made the REST calls.
+**Schema version 43 was detected** on this HA release (2024.6.0) — a number never
+looked up or hardcoded anywhere, which is the point: the column-presence check
+worked correctly on a version this project has no explicit knowledge of.
+
+**SQLite only, still.** MariaDB/Postgres should work through the same
+SQLAlchemy-based reader — different connection URL, different driver dependency —
+but neither has been tried against a live database, so that path stays unverified,
+not supported, until someone actually runs it.
+
+**Explicitly not handled, flagged rather than silently skipped:**
+
+- The `statistics`/`statistics_short_term` tables (long-term rollups that outlive
+  purged raw state history) aren't read yet — a real gap for entities whose raw
+  history has already aged out under HA's default retention.
+- No de-duplication between backfill and live ingestion. Backfill is meant for the
+  history *before* live ingestion started; running it over a range `hia ingest`
+  already covered will currently produce duplicate rows (same real event, two source
+  values) — there's no uniqueness constraint yet to prevent it. A `context_id`-based
+  upsert is the likely fix, once there's more confidence context_id is reliably
+  unique per event across both paths than a single verification session can establish.
+
+18/24 → 24/24 tests passing (6 new: URL rejection, the read-only-connection-really-
+is-read-only check, correct context/attribute/old-state extraction, since/until
+filtering, and two "refuse to guess" paths — a missing required column, and a
+database that isn't a recorder database at all).
 
 ## What to do next
 
-1. **Recorder backfill**, to finish P1: a read-only reader for HA's recorder DB
-   (SQLite first and verified — that's what an actual HA OS install and this
-   project's own dev-ha both use; MariaDB/Postgres should work via the same
-   SQLAlchemy-based approach but is unverified, since there's no live instance of
-   either to test against yet — say so rather than claiming support that hasn't been
-   checked), writing into the *same* `state_changes` table the live writer uses.
-2. Actually run `hia ingest` against a real house for 72+ hours, unattended, to close
-   out P0/P1's soak-test criteria for real.
-3. Then **P2 in [04-roadmap.md](04-roadmap.md)**: the web UI shell.
+1. **Run `hia ingest` against a real house for 72+ hours, unattended**, to close out
+   P0/P1's soak-test criteria for real — the one piece of verification no single
+   session can complete honestly. `hia ingest` is built to run indefinitely and
+   reconnect through anything; actually doing it is what's left.
+2. Then **P2 in [04-roadmap.md](04-roadmap.md)**: the web UI shell.
+3. `statistics` table backfill and live/backfill de-duplication (above) are real
+   gaps worth closing, but neither blocks P2 — track them, don't let them stall
+   forward progress.
 
-Do not skip ahead to the interesting parts. P1 starts a data clock that cannot be
-rewound, and every model in the project is bottlenecked on how long it has been
-running. Getting ingestion live on the user's real house is worth more than any amount
-of early model work — which is exactly why it was built before backfill, not after.
+Do not skip ahead to the interesting parts. P1 started a data clock that cannot be
+rewound — which is exactly why live ingestion was built before backfill, not after —
+and every model in the project is bottlenecked on how long it has been running.
 
 ## This dev machine has an RTX 3060
 
@@ -179,6 +219,9 @@ argument — but make the argument out loud.
 | MLflow in local file-store mode for experiment tracking | Local-only rules out cloud trackers; file mode needs no server process inside a resource-constrained add-on |
 | Splits are temporal, never k-fold/random | House data is autocorrelated at short lag; the goal is generalising forward in time, not backward |
 | Local only, no cloud | Privacy is the whole reason people self-host HA |
+| Recorder backfill checks required columns exist, not `schema_version >= N` | Getting N exactly right is its own research problem across every HA release; a version this project has never seen (schema v43, discovered live) worked correctly on the first try because of this |
+| `ulid-transform` for context bin→string, not a hand-rolled decoder | It's the exact package HA's own recorder uses — guarantees a backfilled `context_id` is byte-for-byte the same string live capture would have produced for the same event |
+| `state_changes.context_id` nullable, `events.context_id` not | Backfill reads messier historical data (a few very old rows predate context tracking); live rows are guaranteed one by construction of the HA client |
 
 ## Platform facts worth not re-deriving
 
@@ -187,10 +230,19 @@ Verified during design; all cited in the docs.
 - **Add-ons**: `config.yaml` with `ingress: true`, Supervisor API via `SUPERVISOR_TOKEN`
   at `http://supervisor/`, connections restricted to `172.30.32.2`, honour
   `X-Ingress-Path` for base-URL rewriting.
-- **Recorder schema**: `entity_id` is normalised into `states_meta`; long-term rollups
-  live in `statistics` / `statistics_short_term` keyed by `statistics_meta`. Context
-  columns (`context_id_bin`, `context_user_id_bin`, `context_parent_id_bin`) arrived in
-  schema v36. The schema migrates across HA releases, so detect `schema_version`.
+- **Recorder schema**: `entity_id` is normalised into `states_meta` (join on
+  `metadata_id`); long-term rollups live in `statistics` / `statistics_short_term`
+  keyed by `statistics_meta` (not yet read by this project — see P1 part 2 above).
+  `last_changed`/`last_updated` are stored as `*_ts` epoch-float columns, not
+  datetimes. Context (`context_id_bin`, `context_user_id_bin`, `context_parent_id_bin`)
+  is 16-byte binary, not string: `context_id`/`context_parent_id` are ULID-encoded,
+  `context_user_id` is UUID-encoded — decode with the `ulid-transform` PyPI package
+  (the same one HA's own recorder uses) plus stdlib `uuid`, never a reimplementation.
+  Attributes live in a separate deduplicated `state_attributes` table, joined via
+  `attributes_id`, column `shared_attrs` (JSON text). None of this is pinned to one
+  `schema_version` number — it has moved a lot (schema v53 on HA's dev branch as of
+  this writing; a real HA 2024.6.0 instance backfilled clean at schema v43) — so
+  detect column *presence*, not a version-number cutoff.
 - **Context attribution**: normally propagates from an automation into the `parent_id`
   of everything it causes — **except that Sun and Time-of-Day triggers set no context
   at all**. This single fact is why the provenance classifier needs three layers rather

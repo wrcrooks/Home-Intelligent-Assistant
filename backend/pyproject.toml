@@ -11,8 +11,10 @@ dependencies = [
   "pydantic>=2.9",
   "pydantic-settings>=2.6",
   "pytz>=2026.3.post1",
+  "sqlalchemy>=2.0.53",
   "structlog>=24.4",
   "typer>=0.13",
+  "ulid-transform>=2.2.9",
 ]
 
 [project.scripts]

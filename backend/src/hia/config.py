@@ -65,6 +65,12 @@ class Settings(BaseSettings):
     docs/05-provenance.md §7: automation firings can't be attributed retroactively, so
     they're captured now even though nothing interprets them until P3."""
 
+    recorder_db_path: str = ""
+    """Path to Home Assistant's recorder database (typically
+    home-assistant_v2.db inside the HA config directory) for `hia backfill`. SQLite
+    only — see hia.ingest.backfill's module docstring for why MariaDB/Postgres
+    aren't wired up yet despite the reader being built to support them."""
+
 
 def get_settings() -> Settings:
     """Load settings fresh from the environment.

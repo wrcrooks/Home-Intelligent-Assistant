@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import aiohttp
@@ -18,6 +19,7 @@ import typer
 from hia.config import Settings, get_settings
 from hia.ha.client import HomeAssistantClient
 from hia.ha.registry import Registries, fetch_all
+from hia.ingest.backfill import run_backfill
 from hia.ingest.pipeline import run_ingest
 from hia.ingest.quality import build_report, format_report
 from hia.ingest.store import EventStore
@@ -102,6 +104,62 @@ async def _ingest(settings: Settings, event_types: list[str], stop_after: int | 
         async with aiohttp.ClientSession() as session:
             client = _client_for(settings, session)
             await run_ingest(client, store, event_types, stop_after=stop_after)
+
+
+@app.command()
+def backfill(
+    db_path: str = typer.Option(
+        "",
+        "--db-path",
+        help="Path to home-assistant_v2.db. Defaults to HIA_RECORDER_DB_PATH.",
+    ),
+    since: str = typer.Option(
+        "",
+        "--since",
+        help="ISO 8601 timestamp; only backfill rows updated at or after this. "
+        "Omit for no lower bound.",
+    ),
+    until: str = typer.Option(
+        "",
+        "--until",
+        help="ISO 8601 timestamp; only backfill rows updated before this. Omit for "
+        "no upper bound — but see hia.ingest.backfill's module docstring on "
+        "duplicate rows if this overlaps a range `hia ingest` already covered.",
+    ),
+) -> None:
+    """Read Home Assistant's recorder database (read-only, SQLite only) and backfill
+    state history into the event store, tagged source=backfill. The other half of
+    P1 (docs/04-roadmap.md); see hia.ingest.backfill for what this does and does not
+    handle yet."""
+    settings = get_settings()
+    configure_logging(settings.log_level, json=settings.log_json)
+    path = db_path or settings.recorder_db_path
+    if not path:
+        raise typer.BadParameter(
+            "No recorder database path given — pass --db-path or set "
+            "HIA_RECORDER_DB_PATH."
+        )
+    since_dt = _parse_iso(since, "--since") if since else None
+    until_dt = _parse_iso(until, "--until") if until else None
+
+    out_db_path = Path(settings.data_dir) / "hia.duckdb"
+    with EventStore(out_db_path) as store:
+        summary = run_backfill(store, path, since=since_dt, until=until_dt)
+    logger.info(
+        "backfill_done",
+        rows_written=summary.rows_written,
+        schema_version=summary.schema_version,
+        earliest=summary.earliest.isoformat() if summary.earliest else None,
+        latest=summary.latest.isoformat() if summary.latest else None,
+    )
+
+
+def _parse_iso(value: str, flag: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise typer.BadParameter(f"{flag} must be an ISO 8601 timestamp, got {value!r}") from exc
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 @app.command(name="data-quality")

@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS state_changes (
     old_state VARCHAR,
     last_changed TIMESTAMPTZ,
     last_updated TIMESTAMPTZ,
-    context_id VARCHAR NOT NULL,
+    context_id VARCHAR,
     context_parent_id VARCHAR,
     context_user_id VARCHAR,
     source VARCHAR NOT NULL,
@@ -152,13 +152,17 @@ class EventStore:
     def write_state_change(
         self,
         *,
+        # context_id is nullable here (unlike `events`, which is live-only and
+        # always has one): a small number of very old recorder rows predate context
+        # tracking entirely, and backfill would rather store what it has than drop
+        # the row or fabricate a value.
         entity_id: str,
         state: str | None,
         attributes: dict[str, object] | None,
         old_state: str | None,
         last_changed: datetime | None,
         last_updated: datetime | None,
-        context_id: str,
+        context_id: str | None,
         context_parent_id: str | None,
         context_user_id: str | None,
         source: Source,

@@ -39,6 +39,9 @@ reconstructing it later is impossible.
 stream; live stream runs 72 hours without a gap; every live state change carries its
 context fields and every automation firing is logged.
 
+> Status: ingestion, storage and backfill are built and verified live; the 72-hour
+> soak test is the one exit criterion still outstanding. See docs/HANDOFF.md.
+
 > From this point on, **leave it running**. Everything later is bottlenecked on
 > accumulated data.
 
