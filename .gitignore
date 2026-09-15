@@ -22,6 +22,11 @@ build/
 backend/.data/
 backend/mlruns/
 
+# Generated state from running compose/dev-ha/ (the instance itself is
+# throwaway; only its configuration.yaml is meant to be committed)
+compose/dev-ha/config/*
+!compose/dev-ha/config/configuration.yaml
+
 # Frontend (added in P2)
 frontend/node_modules/
 frontend/dist/

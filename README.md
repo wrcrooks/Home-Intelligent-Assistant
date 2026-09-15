@@ -5,10 +5,10 @@ behaves, builds a physical and behavioural model of the home from Home Assistant
 APIs, and progressively takes over automation decisions — with a web UI that makes the
 learning process and the model's reasoning visible.
 
-> **Status: P0 underway.** The Home Assistant websocket client, registry sync and
-> `hia` CLI exist and are tested (`backend/`); nothing has been verified against a
-> real running HA instance yet. See [docs/HANDOFF.md](docs/HANDOFF.md) for exactly
-> where things stand.
+> **Status: P0 complete.** The Home Assistant websocket client, registry sync and
+> `hia` CLI (`backend/`) are tested and have been verified against a real running HA
+> instance, including surviving a Core restart. Next: P1 (event storage). See
+> [docs/HANDOFF.md](docs/HANDOFF.md) for exactly where things stand.
 
 ## Documents
 

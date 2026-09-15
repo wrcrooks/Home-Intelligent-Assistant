@@ -17,7 +17,12 @@
 
 services:
   homeassistant:
-    image: ghcr.io/home-assistant/home-assistant:stable
+    # Pinned rather than :stable: this project's dev Docker Engine (20.10.21) can't
+    # unpack a layer in current HA images ("failed to register layer: ... invalid
+    # tar header" — a known old-engine/new-buildkit incompatibility, confirmed by
+    # :stable failing consistently while this tag pulls cleanly). If your Docker is
+    # reasonably current, `:stable` is what you actually want.
+    image: ghcr.io/home-assistant/home-assistant:2024.6.0
     container_name: hia-dev-ha
     volumes:
       - ./config:/config

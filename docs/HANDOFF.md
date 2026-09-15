@@ -1,12 +1,14 @@
 # Handoff
 
 For an agent or developer picking this up cold. Written 2026-09-09, updated 2026-09-15
-to add [06-model-training.md](06-model-training.md), updated again 2026-09-15 as P0
-got underway.
+to add [06-model-training.md](06-model-training.md), updated again the same day as P0
+got underway and again once its exit criterion was actually verified live.
 
 ## Where things stand
 
-**P0 is in progress.** `backend/` (Python 3.13, managed with `uv`) now has:
+**P0 is done, exit criterion verified against a real, running Home Assistant
+instance** — not just the fake test server. `backend/` (Python 3.13, managed with
+`uv`) has:
 
 - `hia.config` — settings via `pydantic-settings`, `HIA_`-prefixed env vars / `.env`.
 - `hia.logging` — structlog, JSON or console rendering.
@@ -27,29 +29,45 @@ got underway.
 - `compose/dev-ha/` — a throwaway Home Assistant instance (`docker compose up -d`)
   with the `demo` integration, for testing against something real.
 
-**What is *not* yet done, and is the actual remainder of P0's exit criterion:**
-running `uv run hia watch` against a genuinely live Home Assistant instance and
-restarting Core mid-stream to confirm it reconnects and keeps going. This was not
-completed this session because Docker Desktop wasn't running on the dev machine and
-starting it wasn't done unprompted — see `compose/dev-ha/docker-compose.yml` for the
-exact commands. The unit-test reconnect coverage is solid, but it is still a fake
-server; treat the real-instance check as outstanding until someone has actually run
-it.
+**How it was verified**, with Docker Desktop running: brought up
+`compose/dev-ha/` (pinned to `2024.6.0` — this dev machine's Docker Engine, 20.10.21,
+fails to unpack a layer in the current `:stable` image with `archive/tar: invalid tar
+header`; confirmed reproducible, and confirmed an older tag pulls fine, before
+concluding it's an engine/buildkit incompatibility rather than a fluke — see the
+comment in the compose file), drove onboarding entirely via HA's own HTTP APIs with
+no browser (`POST /api/onboarding/users` → auth code → `POST /auth/token` → a
+short-lived bearer token → over the websocket, `auth/long_lived_access_token` to mint
+a real 10-year token), then:
 
-Nothing about the *design* has been validated against a running Home Assistant
-instance either — the WebSocket protocol details (auth handshake, `subscribe_events`,
-message-id rules, the five registry-list command names) were confirmed against HA's
-own developer docs before being implemented, but that's a documentation check, not a
-live one.
+- `hia check` and `hia registry` both worked against the live instance — registry
+  parsing handled real HA payloads (with extra fields beyond the ones this project's
+  models declare) without complaint, exactly the point of `extra="allow"`.
+- `hia watch` in the background, confirmed a real toggled light arrived as a
+  `state_changed` event (`seq=1, resumed_after_gap=False`).
+- `docker compose restart homeassistant` mid-stream. The client logged
+  `ha_disconnected` twice with growing backoff (2.0s, 4.0s), then `ha_connected
+  resumed=True` once Core came back — with **no manual resubscription needed**.
+- The next event after reconnect (a demo sensor changing on its own, not even one we
+  triggered) carried `resumed_after_gap=True, seq=2`; the two after that were back to
+  `resumed_after_gap=False` at `seq=3, seq=4`. Monotonic across the reconnect, exactly
+  as designed.
+
+Incidental finding worth keeping: toggling the light via the REST API produced a
+`context.user_id` on the resulting state change (the REST bearer token maps to a user
+account) — a live, small-scale demonstration of exactly the "an automated caller can
+carry a user_id and look human" trap documented in `05-provenance.md` and `CLAUDE.md`.
+Nothing to fix; just confirms the concern was correctly identified, not hypothetical.
+
+The throwaway instance and its generated state were torn down afterward
+(`docker compose down` + config directory cleaned); nothing from that run is meant to
+persist, and `compose/dev-ha/config/` is now gitignored except `configuration.yaml`.
 
 ## What to do next
 
-1. **Finish P0's real-instance check** (above) — the one piece of verification this
-   session couldn't complete.
-2. Move to **P1 in [04-roadmap.md](04-roadmap.md)**: event storage (DuckDB + Parquet)
-   and — critically — start capturing `context` fields and `automation_triggered` /
-   `call_service` on every event from day one, since that capture cannot be
-   retrofitted (see "Traps" in `CLAUDE.md`).
+Move to **P1 in [04-roadmap.md](04-roadmap.md)**: event storage (DuckDB + Parquet)
+and — critically — start capturing `context` fields and `automation_triggered` /
+`call_service` on every event from day one, since that capture cannot be retrofitted
+(see "Traps" in `CLAUDE.md`).
 
 Do not skip ahead to the interesting parts. P1 starts a data clock that cannot be
 rewound, and every model in the project is bottlenecked on how long it has been
