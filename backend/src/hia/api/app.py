@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from hia.api.actors import ActorRow, build_actors_payload
+from hia.api.admission import build_admission_payload
 from hia.api.ingress import RestrictToSupervisorMiddleware
 from hia.api.live import start_background_task, stop_background_task
 from hia.api.state import AppState
@@ -28,6 +29,7 @@ from hia.ingest.quality import QualityReport, build_report
 from hia.ingest.store import EventStore, HourlyActivity, LatestState
 from hia.logging import get_logger
 from hia.provenance.actors import ActorClass
+from hia.provenance.admission import EntityAdmission
 
 logger = get_logger(__name__)
 
@@ -128,6 +130,18 @@ def create_app(settings: Settings) -> FastAPI:
 
         await state.run_db(_write)
         return {"status": "ok"}
+
+    @app.get("/api/provenance/admission")
+    async def list_admission() -> list[EntityAdmission]:
+        """Admission control (docs/05-provenance.md §6): per entity, over the
+        trailing 30 days, ``automation_share`` and
+        ``effective_human_events_per_week``. Makes its own live round trip to
+        Home Assistant (automation configs) — see ``hia.api.actors``'s module
+        docstring for why this is tested by calling ``build_admission_payload``
+        directly rather than through ``TestClient``."""
+        state: AppState = app.state.hia
+        client = state.new_client()
+        return await build_admission_payload(client, state.store)
 
     @app.websocket("/api/ws/events")
     async def ws_events(websocket: WebSocket) -> None:

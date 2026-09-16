@@ -81,18 +81,23 @@ without disturbing the soak test.
 live house (`HomeAssistantClient`'s new REST `.get()` method, confirming the
 user's token is admin-privileged, which `05-provenance.md`'s Layer 2 needs).
 **Slice 2 (Layer 3 actor classification — storage, suggestion heuristics,
-API/CLI, and now the tagging UI) is functionally done, except admission
-control.** Real users fetched live from the house (9 real accounts, including a
-second human user beyond the owner), a real confirm-and-persist round trip
-verified through the actual UI plus a separate `curl` check, and two real bugs
-found and fixed on this dev machine along the way (a FastAPI/`from __future__
-import annotations` interaction that silently broke the confirm endpoint's
-request body, and a `TestClient`-plus-outbound-async-I/O hang in the same
-category `test_state.py` already documents). **Still outstanding: tagging the
-real house's accounts for real** (verification used a throwaway store, not the
-soak test's — the real `actor_classifications` table is still empty) and
-admission control (`automation_share`). See "P3, slice 1", "P3, slice 2 (part
-1)" and "P3, slice 2 (part 2)" below for the detail.
+API/CLI, tagging UI — and admission control) is now fully complete.** Real
+users fetched live from the house (9 real accounts, including a second human
+user beyond the owner), a real confirm-and-persist round trip verified through
+the actual UI plus a separate `curl` check, admission control (`automation_share`,
+the effective-human-events floor) verified against the real accumulated
+~36,000-row soak-test store, and several real bugs found and fixed along the
+way — a FastAPI/`from __future__ import annotations` interaction that silently
+broke the confirm endpoint's request body, a `TestClient`-plus-outbound-
+async-I/O hang in the same category `test_state.py` already documents, a real
+false-positive in the actor-regularity heuristic (fixed by adding the
+interval-entropy signal the design doc specified but the first pass deferred),
+and a logging bug that spammed a misleading warning for every non-automation
+entity in the registry. **Still outstanding: tagging the real house's accounts
+for real** — every verification above deliberately used a throwaway store, so
+the real `actor_classifications` table is still empty, which is why `hia
+admission-report` currently reports every entity as not learnable. See "P3,
+slice 1" and "P3, slice 2 (parts 1-3)" below for the detail.
 
 ### P0 — the Home Assistant client
 
@@ -943,6 +948,93 @@ good reason; this is the first concrete proof why, and a reminder that
 "thoroughly unit tested" and "verified against real data" are not the same
 claim — this project has said that before, and it was true again here.
 
+### P3, slice 2 (part 3) — admission control
+
+`hia.provenance.admission` (new): the other half of §6, and the last piece of
+P3 slice 2. Two independent per-entity numbers, both over a trailing 30-day
+window (`WINDOW_DAYS`, matching the docs exactly):
+
+- **`automation_share`** — what fraction of an entity's state changes are
+  already explained by a rule (the full Layer 1/2/3 classifier's
+  `automation_ha`/`automation_external` kinds). `> 80%` → `excluded`; `30–80%`
+  → `warned`; `< 30%` → `normal` — the exact thresholds from the docs' own
+  table. Whole-entity exclusion only, as the docs specify — conditional
+  exclusion (excluding only the tautological region a rule's conditions
+  cover) is an explicitly-deferred refinement, not attempted here.
+- **`effective_human_events_per_week`** — of the events *not* explained by a
+  rule, how many are confidently human (`human_ui`/`human_voice`)? Below
+  `EFFECTIVE_HUMAN_EVENTS_FLOOR_PER_WEEK` (5.0, matching "~5/week" in the
+  docs), `learnable` is `False` — "not enough human signal to learn from",
+  regardless of `automation_share`. Docs call this "the headline metric".
+
+**Collision detection** (§6's other half — "an automation also targets this
+entity") is implemented as `responsible_automations`: which automations were
+actually observed causing changes to each entity, ready for P6's governor to
+check against the moment decision points exist. There is no live conflict to
+detect yet, since nothing is promoted to act on anything — that check is
+future work, not deferred-and-forgotten, just not yet meaningful.
+
+Exposed as `GET /api/provenance/admission` and `hia admission-report`
+(read-only, same connectivity/locking posture as `hia provenance-report`).
+`hia.api.admission.build_admission_payload` mirrors `hia.api.actors`'s shape
+exactly — a thin orchestration layer fetching live automation targets, then
+handing off to the pure `hia.provenance.admission` logic.
+
+**A real bug, found immediately by running this against real data, not a
+hypothetical**: `hia.ha.automations.fetch_targets`'s loop logged
+`automation_missing_unique_id` for *every single non-automation entity* in
+the registry — 482 of them on this house — not just for a genuine automation
+missing its id. The original `if not entity.entity_id.startswith
+("automation.") or not entity.unique_id:` combined "this isn't an automation
+at all" (routine, silent) with "this is an automation but has no id"
+(genuinely worth a warning) into one branch and one misleading message. A
+unit test already exercised a non-automation entity through this exact code
+path but only ever asserted on the return value, never on what got logged —
+exactly the kind of gap that only shows up against a real, full-sized
+registry. Fixed by splitting into two checks; verified by re-running `hia
+admission-report` against the real accumulated store and confirming the
+spam is gone.
+
+**Verified against the real accumulated soak-test store** (~36,000
+state_changes and counting), not a throwaway one — this needed one more brief
+stop/verify/restart cycle (the store's one-writer-XOR-many-readers rule,
+same as always), kept short by batching the log-spam fix's verification into
+the same window. Real, informative output: 465 entities with recent history,
+6 correctly `excluded` (the `jottick` integration's own automations, whose
+state changes trace back to themselves — expected and correct: an automation
+entity's own on/off state is definitionally caused by its own firings), 1
+`warned`, the rest `normal`. **Every entity currently shows `learnable:
+false`** — not a bug, the expected and correct consequence of the real
+store's `actor_classifications` table still being empty (nobody has tagged
+an account through the real soak-test instance yet, tracked in "What to do
+next" below): with zero confirmed human actors, zero rows can classify as
+`human_ui`/`human_voice` yet, so `effective_human_events_per_week` is
+genuinely zero everywhere. This is the system correctly reporting "nothing
+to learn from yet" rather than confidently guessing — exactly the abstain-
+over-guess behavior the whole classifier is built around.
+
+One thing noticed and deliberately *not* "fixed": some `automation_ha` rows
+show up as `(unattributed)` in the report — Layer 1 resolved a `call_service`
+origin but couldn't name a specific automation responsible. Reconsidered,
+not a bug: unlike `automation_triggered`/`script_started` (which carry the
+firing automation/script's own entity_id), a `call_service` event has no
+well-defined "who initiated this" field at all — HA's context system is what
+answers that, not the event payload, and where the context chain runs out,
+"machine-caused, source unknown" is the honest answer, not a defect to paper
+over with a guess.
+
+89/89 → 96/96 tests passing, ruff and mypy `--strict` both clean.
+
+**With this, P3 slice 2 is fully complete**: Layer 3 (storage, suggestion
+heuristics, API/CLI, tagging UI) and admission control (`automation_share`,
+the effective-human-events floor, automation-involvement tracking) are all
+built and verified live against the real house. What remains of P3 overall is
+the same as before: `human_physical`/`device_local`/`hia_self` stay
+unclassifiable (see `classify.py`'s docstring), and the actual exit criterion
+(a hand-labelled 200-row precision check) needs real accumulated,
+Layer-3-classified history and manual labelling that don't exist yet —
+gated, in practice, on the accounts actually getting tagged.
+
 ## What to do next
 
 1. ~~Confirm the CI hang is actually fixed~~ — **done**: the push containing
@@ -952,48 +1044,49 @@ claim — this project has said that before, and it was true again here.
    led to the real fix), and the test rewrite is confirmed correct on GitHub's
    own Linux runners, not just locally.
 2. **Keep `hia serve` running unattended for 72+ hours** to close out P0/P1's
-   soak-test criteria for real. **This clock was reset once already**: the
-   original process (running ~24h) was deliberately restarted with the user's
-   explicit approval to pick up the new Layer 3/activity-chart backend routes
-   (a running process's FastAPI route table is fixed at startup — new code in
-   the repo has zero effect on it until restarted) — a real, useful thing to
-   know: **restarting `hia serve` is safe for the data** (DuckDB's WAL
-   recovered a forceful process kill cleanly, all 34,024 accumulated rows
-   intact, confirmed by comparing `/api/data-quality` before and after), it
-   just restarts the *continuous-uptime* clock, not the data. Avoid another
-   restart unless there's a real reason (new code that needs it, same as this
-   one) — DuckDB's one-writer-or-many-readers model still means a read-only
-   tool (`hia data-quality`, `hia provenance-report`) cannot run at the same
-   time as `hia serve` regardless of restarts.
-3. **Run `hia provenance-report` against real accumulated history** once the
-   store can safely be opened read-only (after the soak test above, or against a
-   separate `HIA_DATA_DIR`) — the classifier's logic is fully covered
-   synthetically, and its live-only inputs (automation config REST, user
-   registry) are each independently verified for real, but the whole pipeline
-   running end-to-end against real accumulated history hasn't been checked yet;
-   this is the natural next real-data check, same category as the soak test.
+   soak-test criteria for real. **This clock has now been reset twice**: once
+   to pick up the Layer 3/activity-chart routes, once more to pick up
+   admission control and the `fetch_targets` log-spam fix — both times with
+   the user's explicit approval (the first) or as a direct continuation of
+   approved work (the second), and both times **safe for the data**: DuckDB's
+   WAL recovered a forceful process kill cleanly each time, with the row
+   count intact and growing across restarts (confirmed via `/api/data-quality`
+   before and after each one). A running process's FastAPI route table is
+   fixed at startup — new code in the repo has zero effect on it until
+   restarted — so a restart is genuinely necessary whenever new backend routes
+   ship, but avoid a *third* one without a real reason; the uptime clock,
+   not the data, is what a restart costs. DuckDB's one-writer-or-many-readers
+   model still means a read-only tool (`hia data-quality`, `hia
+   provenance-report`, `hia admission-report`) cannot run at the same time as
+   `hia serve` regardless of restarts.
+3. ~~Run `hia provenance-report`/`hia admission-report` against real
+   accumulated history~~ — **done**: both now verified against the real
+   ~36,000-row soak-test store (not just synthetically or against a throwaway
+   one). Found and fixed one real bug along the way (log spam in
+   `hia.ha.automations.fetch_targets` — see the admission-control section
+   above).
 4. **This real house has no HA automations configured at all** (confirmed via
    `hia registry`) — Layer 2 correlation has nothing to correlate against here
    until some exist. If the user adds even one automation, `hia
    ha.automations.fetch_targets`'s actual *success* path (not just its 404
    path, which is all that's verified so far) becomes checkable for real. Worth
    asking about, not assuming.
-5. **P3 slice 2 is done except admission control.** Layer 3's classification
-   storage, suggestion heuristics, API/CLI, and now the tagging UI (a real
-   "Actors" tab, verified live including a real confirm-and-persist round
-   trip) are all built and verified against the real house. **Tag the real
-   house's accounts for real** — the *soak-test* `hia serve` already serves
-   this exact page (nothing new to deploy); open it and confirm the owner, the
+5. **P3 slice 2 is now fully complete** — Layer 3 (storage, suggestion
+   heuristics, API/CLI, tagging UI) and admission control are all built and
+   verified live. **The one genuinely outstanding task: tag the real house's
+   accounts for real.** The *soak-test* `hia serve` already serves the
+   "Actors" tab (nothing new to deploy); open it and confirm the owner, the
    second real human user, and however the four `ThinkSmart` accounts should
-   be classified. This was deliberately done against a throwaway store during
-   verification, not the soak-test one, so the real store's
-   `actor_classifications` table is still empty — a genuine two-minute task
-   still outstanding, not a hypothetical one.
-   What's left of slice 2:
-   - **Admission control** (`docs/05-provenance.md` §6): trailing-30-day
-     `automation_share` per entity, the exclusion thresholds, and collision
-     detection. Needs Layer 3 classifications to exist first (done), so this is
-     now unblocked.
+   be classified. Every prior confirm-and-persist verification this session
+   deliberately used a throwaway store, so the real store's
+   `actor_classifications` table is still empty — which is also why
+   `hia admission-report` currently reports every entity as `learnable:
+   false`: with zero confirmed human actors, zero rows can classify as
+   `human_ui`/`human_voice` yet. **Tagging the real accounts is now the single
+   highest-leverage next action** — it's what turns both the provenance
+   classifier and admission control from "structurally correct but reporting
+   nothing" into actually useful.
+   What's left of P3 overall (not slice 2, which is done):
    - **`human_physical`/`device_local`** remain unclassifiable — see
      `classify.py`'s own docstring. The per-entity `device_local` opt-in list
      `05-provenance.md` §4 describes is what would resolve this, and isn't
@@ -1003,13 +1096,11 @@ claim — this project has said that before, and it was true again here.
      accumulated, Layer-3-classified history and manual labelling — neither
      exists yet; this is the natural target once the accounts above are
      actually tagged and the soak test has run a while.
-6. **Once the store can be read again, try `hia actors`/`hia
-   provenance-report` for real** against the accumulated soak-test history —
-   the live `config/auth/list` fetch and the classifier's logic are each
-   independently verified, but the whole pipeline running end-to-end against
-   real accumulated history (event counts, whether the `ThinkSmart` accounts'
-   regularity score says anything once they have history) hasn't been checked
-   yet.
+6. Once the real accounts are tagged, **re-run `hia admission-report` for
+   real** — every number in it right now (`learnable: false` everywhere,
+   `automation_share` computed with zero automations to correlate against)
+   reflects a not-yet-set-up house, not a validation of the metric's actual
+   usefulness on a house with real human signal.
 7. Consider running `/run-skill-generator` to capture the Playwright-based
    screenshot verification path as a project skill — used three times now
    (P2, the activity chart, the actors tab) without ever being captured as one.
@@ -1090,8 +1181,9 @@ argument — but make the argument out loud.
 | `ConfirmActorRequest` (Pydantic model) lives at module scope, not inside `create_app()` | Reproduced directly: with `from __future__ import annotations` active, FastAPI can't resolve a locally-scoped model's string annotation, and the route silently 422s on every request instead of reading the body |
 | Routes that make their own outbound HA call are tested by calling their logic directly, not through `TestClient` | Reproduced directly (caught by pytest-timeout): `TestClient`'s cross-thread portal bridge hangs against a route handler doing genuine outbound async I/O mid-request — the same root cause `test_state.py` already documented for the WebSocket relay, now confirmed to generalize |
 | Regularity suggestion requires *both* time-of-day and interval entropy to be low, not either alone | Live-found, not theoretical: the owner's own real account false-positived on time-of-day entropy alone (a peaked but innocent pattern — concentrated testing sessions); interval entropy correctly told it apart, and requiring both closes that whole class of false positive |
-
-## Platform facts worth not re-deriving
+| Admission control is whole-entity exclusion only, no conditional exclusion | Matches docs/05-provenance.md §6 exactly: conditional exclusion (excluding only the tautological region a rule's conditions cover) is explicitly named as a refinement on top of this, not part of the first version |
+| A `call_service` origin with no resolvable `entity_id` reports "unattributed", not a guessed source | Unlike `automation_triggered`/`script_started`, a `call_service` event has no well-defined "who initiated this" field at all — inventing an attribution would be a guess this project's abstain-over-guess principle doesn't allow, even for a display-only detail |
+| `fetch_targets` logs nothing for a non-automation entity, only for a genuine automation missing its id | Live-found: the original combined check logged a misleading warning for *every* non-automation entity in the registry (482 of them on this house) — a unit test exercised the code path but only checked the return value, never the log output |
 
 Verified during design; all cited in the docs.
 

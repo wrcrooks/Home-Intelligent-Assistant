@@ -389,19 +389,29 @@ class EventStore:
             for i in range(hours)
         ]
 
-    def events_for_provenance(self) -> list[ProvenanceEvent]:
+    def events_for_provenance(self, *, since: datetime | None = None) -> list[ProvenanceEvent]:
         """``automation_triggered``/``script_started``/``call_service`` rows,
         oldest first — the raw material ``hia.provenance``'s Layer 1 context-chain
-        resolver and Layer 2 automation-fire correlator are built from."""
-        rows = self._con.execute(
-            """
+        resolver and Layer 2 automation-fire correlator are built from.
+        ``since`` narrows to rows fired at or after that time — safe to window
+        to the same range as the ``state_changes`` being classified, since a
+        chain only ever links a state change to a machine event moments before
+        it, never one from outside the window (``hia.provenance.admission``'s
+        trailing-30-day admission-control read, in particular, would otherwise
+        scan the whole table's history on every run)."""
+        query = """
             SELECT event_type, time_fired, context_id, context_parent_id,
                    context_user_id, data
             FROM events
             WHERE event_type IN ('automation_triggered', 'script_started', 'call_service')
-            ORDER BY time_fired
-            """
-        ).fetchall()
+        """
+        params: list[object] = []
+        if since is not None:
+            query += " AND time_fired >= ?"
+            params.append(since)
+        query += " ORDER BY time_fired"
+
+        rows = self._con.execute(query, params).fetchall()
         return [
             ProvenanceEvent(
                 event_type=r[0],
@@ -414,16 +424,24 @@ class EventStore:
             for r in rows
         ]
 
-    def state_changes_for_provenance(self) -> list[StateChangeForProvenance]:
+    def state_changes_for_provenance(
+        self, *, since: datetime | None = None
+    ) -> list[StateChangeForProvenance]:
         """Every ``state_changes`` row, oldest first, narrowed to what
-        ``hia.provenance`` needs to classify it."""
-        rows = self._con.execute(
-            """
+        ``hia.provenance`` needs to classify it. ``since`` narrows to rows
+        updated at or after that time — see :meth:`events_for_provenance`'s
+        docstring for why windowing both together is safe."""
+        query = """
             SELECT entity_id, last_updated, context_id, context_parent_id
             FROM state_changes
-            ORDER BY last_updated
-            """
-        ).fetchall()
+        """
+        params: list[object] = []
+        if since is not None:
+            query += " WHERE last_updated >= ?"
+            params.append(since)
+        query += " ORDER BY last_updated"
+
+        rows = self._con.execute(query, params).fetchall()
         return [
             StateChangeForProvenance(
                 entity_id=r[0], changed_at=r[1], context_id=r[2], context_parent_id=r[3]

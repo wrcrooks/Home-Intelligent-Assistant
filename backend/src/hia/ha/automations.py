@@ -51,10 +51,21 @@ async def fetch_targets(
     loaded automation has an id — but registry data from a real house has already
     surprised this project once) or whose config 404s are skipped and logged, not
     raised: one unreadable automation must never block classifying every other
-    event."""
+    event.
+
+    Every other entity in the registry (the overwhelming majority of it, on a
+    real house — sensors, sun/weather entities, anything that isn't an
+    automation) is silently skipped, not logged: reproduced live against a
+    real 482-entity registry, an earlier version of this loop logged
+    ``automation_missing_unique_id`` for every single non-automation entity
+    (the ``or`` combined "not an automation" with "an automation missing its
+    id" into one branch and one misleading message), which is just normal
+    filtering, not a warning-worthy condition."""
     results: list[AutomationTargets] = []
     for entity in entities:
-        if not entity.entity_id.startswith("automation.") or not entity.unique_id:
+        if not entity.entity_id.startswith("automation."):
+            continue
+        if not entity.unique_id:
             logger.warning("automation_missing_unique_id", entity_id=entity.entity_id)
             continue
         config = await client.get(f"/api/config/automation/config/{entity.unique_id}")

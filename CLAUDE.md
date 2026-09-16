@@ -36,24 +36,29 @@ executable bit on `run`/`finish` from being authored on a Windows dev machine,
 and a Docker build-cache bug where the `git clone` step's unchanging instruction
 text kept every rebuild reusing the first cached clone) — all detailed in
 `docs/HANDOFF.md`. **P0, P1 and P2 are all done.** `hia serve` is running against
-a real house right now for the 72-hour soak test (~24h in) — do not kill it to
+a real house right now for the 72-hour soak test (uptime clock reset twice today
+to ship new backend routes, ~0h in as of the last restart) — do not kill it to
 run something else against the same data directory. **P3 (provenance classifier)
 is split into two slices; slice 1** (Layer 1 context-chain resolution, Layer 2
-automation-fire correlation) **and slice 2** (Layer 3 actor classification:
-storage, suggestion heuristics, API/CLI, and the tagging UI) **are both built
-and functionally verified** — synthetically, plus real checks against the live
-house (an admin-token REST confirmation, a live fetch of all 9 real HA user
-accounts including a second real human user, and a real confirm-and-persist
-round trip through the actual "Actors" UI tab, checked with a separate `curl`
-against the store rather than just trusting the UI). `classify()` now outputs
-the taxonomy (`human_ui`/`human_voice`/`automation_ha`/`automation_external`)
-wherever an actor is owner-confirmed, still abstaining to `unknown` otherwise —
-see `hia.provenance.classify`'s docstring for exactly which classes remain out
-of reach and why. Still missing: admission control (`automation_share`), and
-the real house's own accounts still need tagging for real (verification used a
-throwaway store, not the soak test's). The frontend also has a live 24h
-activity chart (`ActivityChart.tsx`) added independent of any phase — pushed
-straight from the WebSocket relay, not polled. See [docs/HANDOFF.md](docs/HANDOFF.md)
+automation-fire correlation) **and slice 2** (Layer 3 actor classification —
+storage, suggestion heuristics, API/CLI, tagging UI — and admission control,
+`automation_share` + the effective-human-events floor) **are both fully built
+and verified** — synthetically, plus real checks against the live house (an
+admin-token REST confirmation, a live fetch of all 9 real HA user accounts
+including a second real human user, a real confirm-and-persist round trip
+through the actual "Actors" UI tab checked with a separate `curl` against the
+store, and admission control run against the real ~36,000-row accumulated
+store). `classify()` outputs the taxonomy
+(`human_ui`/`human_voice`/`automation_ha`/`automation_external`) wherever an
+actor is owner-confirmed, still abstaining to `unknown` otherwise — see
+`hia.provenance.classify`'s docstring for exactly which classes remain out of
+reach and why. **The one thing still outstanding: the real house's own
+accounts need tagging for real** — every verification above deliberately used
+a throwaway store, so the real `actor_classifications` table is still empty,
+which is why `hia admission-report` currently reports every entity as not
+learnable. The frontend also has a live 24h activity chart
+(`ActivityChart.tsx`) added independent of any phase — pushed straight from
+the WebSocket relay, not polled. See [docs/HANDOFF.md](docs/HANDOFF.md)
 for the detail, including a real reconnect bug in the P0 client found and fixed
 during P2 (HA can interleave `event` messages with `subscribe_events` results
 across multiple pending

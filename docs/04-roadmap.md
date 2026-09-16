@@ -88,19 +88,23 @@ Unknown rate below 15%.
 > (context-chain resolution) and Layer 2 (automation-fire correlation) — is
 > built**, verified against fake-HA fixtures and with one real check against the
 > live house (confirms the REST plumbing Layer 2 needs, and that the configured
-> token is admin-privileged). **Slice 2 — Layer 3 actor classification: storage,
-> suggestion heuristics, API/CLI, and the tagging UI — is functionally done**,
-> verified live against the real house's 9 real user accounts, including a real
-> confirm-and-persist round trip through the actual UI. `classify()` now
-> outputs the full taxonomy where an actor is confirmed (`human_ui`/
-> `human_voice`/`automation_ha`/`automation_external`), still abstaining
-> (`unknown`) — CLAUDE.md's "abstain rather than guess" — for an unconfirmed
-> actor or a row with no context at all (`human_physical`/`device_local` remain
-> unclassifiable; see `hia.provenance.classify`'s docstring for why). **Still
-> missing**: admission control (`automation_share`, collision detection, §6),
-> and the real house's own accounts still need tagging for real (verification
-> used a throwaway store). The exit criterion above needs admission control
-> plus real hand-labelled data nothing built so far can produce.
+> token is admin-privileged). **Slice 2 — Layer 3 actor classification (storage,
+> suggestion heuristics, API/CLI, tagging UI) and admission control
+> (`automation_share`, the effective-human-events floor, §6) — is now fully
+> complete**, verified live against the real house's 9 real user accounts and
+> its ~36,000-row accumulated store, including a real confirm-and-persist round
+> trip through the actual UI. `classify()` outputs the full taxonomy where an
+> actor is confirmed (`human_ui`/`human_voice`/`automation_ha`/
+> `automation_external`), still abstaining (`unknown`) — CLAUDE.md's "abstain
+> rather than guess" — for an unconfirmed actor or a row with no context at all
+> (`human_physical`/`device_local` remain unclassifiable; see
+> `hia.provenance.classify`'s docstring for why). **Still outstanding: the real
+> house's own accounts still need tagging for real** (every verification used a
+> throwaway store) — until that happens, admission control correctly reports
+> every entity as not learnable, since zero confirmed human actors means zero
+> rows can classify as human evidence yet. The exit criterion above needs real
+> hand-labelled data nothing built so far can produce, gated in practice on the
+> accounts actually getting tagged.
 
 ---
 

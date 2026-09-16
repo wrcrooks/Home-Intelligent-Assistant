@@ -11,8 +11,11 @@ not support a read-write process coexisting with a separate read-only one (verif
 against a real Linux container; see hia.api.state's module docstring and
 docs/HANDOFF.md). ``hia ingest``/``hia backfill``/``hia data-quality`` remain as
 standalone tools, but none of them may run at the same time as ``hia serve``
-against the same data directory. ``hia provenance-report`` (P3, first slice) runs
-the Layer 1 + Layer 2 provenance classifier (hia.provenance) over stored history.
+against the same data directory. ``hia provenance-report`` (P3) runs the full
+Layer 1 + Layer 2 + Layer 3 provenance classifier (hia.provenance) over stored
+history; ``hia admission-report`` (P3 slice 2) runs admission control
+(automation_share, effective human events/week — docs/05-provenance.md §6) over
+the trailing 30 days.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ from hia.ingest.pipeline import run_ingest
 from hia.ingest.quality import build_report, format_report
 from hia.ingest.store import EventStore
 from hia.logging import configure_logging, get_logger
+from hia.provenance.admission import compute_admission, format_admission_report
 from hia.provenance.report import build_report as build_provenance_report
 from hia.provenance.report import format_report as format_provenance_report
 
@@ -249,17 +253,20 @@ def _registries_to_dict(registries: Registries) -> dict[str, list[dict[str, obje
 
 @app.command(name="provenance-report")
 def provenance_report() -> None:
-    """Classify every stored state change with the Layer 1 (context chain) +
-    Layer 2 (automation-fire correlation) provenance classifier (docs/05-
-    provenance.md §4, hia.provenance) and print a summary. Connects to Home
-    Assistant to fetch automation configs (Layer 2's target sets) and opens the
-    event store read-only — safe alongside `hia serve`, `hia ingest`, or another
-    `hia provenance-report`, but not alongside `hia backfill`.
+    """Classify every stored state change with the full Layer 1 (context
+    chain) + Layer 2 (automation-fire correlation) + Layer 3 (actor
+    classification) provenance classifier (docs/05-provenance.md §4,
+    hia.provenance) and print a summary. Connects to Home Assistant to fetch
+    automation configs (Layer 2's target sets) and opens the event store
+    read-only — safe alongside `hia serve`, `hia ingest`, or another `hia
+    provenance-report`, but not alongside `hia backfill`.
 
-    Layer 3 (actor classification) isn't built yet, so anything neither layer can
-    explain is reported `unknown`, not `human` — this deliberately does not
-    attempt the full docs/04-roadmap.md P3 exit criterion (a hand-labelled 200-row
-    precision check) here; see docs/HANDOFF.md."""
+    A row neither layer explains, or whose actor hasn't been owner-confirmed
+    yet (`hia actors-confirm`), is reported `unknown`, never guessed —
+    docs/HANDOFF.md has the detail on what's deliberately still unclassifiable
+    (`human_physical`/`device_local`/`hia_self`). This does not attempt the
+    full docs/04-roadmap.md P3 exit criterion (a hand-labelled 200-row
+    precision check) — that needs real manual labelling no CLI can do."""
     settings = get_settings()
     configure_logging(settings.log_level, json=settings.log_json)
     asyncio.run(_provenance_report(settings))
@@ -277,6 +284,36 @@ async def _provenance_report(settings: Settings) -> None:
     with EventStore(db_path, read_only=True) as store:
         report = build_provenance_report(store, targets)
     print(format_provenance_report(report))
+
+
+@app.command(name="admission-report")
+def admission_report() -> None:
+    """Admission control (docs/05-provenance.md §6): per entity, over the
+    trailing 30 days, what fraction of its state changes are already explained
+    by an automation (`automation_share`) and how many confidently-human
+    events per week it actually has to learn from
+    (`effective_human_events_per_week`). Flags entities that are already
+    fully automated (nothing useful to learn there) and ones with too little
+    human signal to learn from at all, regardless of automation_share. Same
+    connectivity/locking posture as `hia provenance-report` — connects to HA
+    for automation targets, opens the store read-only."""
+    settings = get_settings()
+    configure_logging(settings.log_level, json=settings.log_json)
+    asyncio.run(_admission_report(settings))
+
+
+async def _admission_report(settings: Settings) -> None:
+    db_path = Path(settings.data_dir) / "hia.duckdb"
+    async with aiohttp.ClientSession() as session:
+        client = _client_for(settings, session)
+        registries = await fetch_all(client)
+        automation_targets = await fetch_targets(client, registries.entities)
+        targets = {a.entity_id: a.targets for a in automation_targets}
+        logger.info("automation_targets_fetched", count=len(targets))
+
+    with EventStore(db_path, read_only=True) as store:
+        admissions = compute_admission(store, targets)
+    print(format_admission_report(admissions))
 
 
 @app.command()
