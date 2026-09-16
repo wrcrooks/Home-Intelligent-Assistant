@@ -27,6 +27,11 @@ export interface QualityReport {
   gap_resumption_count: number;
 }
 
+export interface HourlyActivity {
+  hour: string;
+  count: number;
+}
+
 export interface StateChangedMessage {
   type: "state_changed";
   entity_id: string;

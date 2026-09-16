@@ -5,7 +5,12 @@
 // document's own URL follow that prefix automatically. An absolute path would work
 // in local dev and silently break under ingress.
 
-import type { LatestState, QualityReport, StateChangedMessage } from "./types";
+import type {
+  HourlyActivity,
+  LatestState,
+  QualityReport,
+  StateChangedMessage,
+} from "./types";
 
 const API_BASE = new URL("api/", document.baseURI);
 
@@ -19,6 +24,12 @@ export async function fetchDataQuality(): Promise<QualityReport> {
   const res = await fetch(new URL("data-quality", API_BASE));
   if (!res.ok) throw new Error(`GET /api/data-quality failed: ${res.status}`);
   return (await res.json()) as QualityReport;
+}
+
+export async function fetchHourlyActivity(): Promise<HourlyActivity[]> {
+  const res = await fetch(new URL("state-changes/hourly", API_BASE));
+  if (!res.ok) throw new Error(`GET /api/state-changes/hourly failed: ${res.status}`);
+  return (await res.json()) as HourlyActivity[];
 }
 
 /**

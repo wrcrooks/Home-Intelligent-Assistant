@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -120,6 +121,51 @@ def test_state_changes_for_provenance_carries_context_columns() -> None:
         assert row.entity_id == "light.a"
         assert row.context_id == "ctx-1"
         assert row.context_parent_id == "ctx-parent"
+
+
+def test_state_change_counts_by_hour_zero_fills_and_excludes_out_of_window_rows() -> None:
+    with EventStore(":memory:") as store:
+        now = datetime.now(UTC)
+        store.write_state_change(
+            entity_id="light.a",
+            state="on",
+            attributes=None,
+            old_state=None,
+            last_changed=now,
+            last_updated=now,
+            context_id=None,
+            context_parent_id=None,
+            context_user_id=None,
+            source="live",
+        )
+        too_old = now - timedelta(hours=10)
+        store.write_state_change(
+            entity_id="light.b",
+            state="on",
+            attributes=None,
+            old_state=None,
+            last_changed=too_old,
+            last_updated=too_old,
+            context_id=None,
+            context_parent_id=None,
+            context_user_id=None,
+            source="live",
+        )
+
+        buckets = store.state_change_counts_by_hour(hours=3)
+
+        assert len(buckets) == 3
+        # Only the recent row falls inside the 3-hour window -- the 10-hour-old
+        # one must not silently leak into any bucket.
+        assert sum(b.count for b in buckets) == 1
+        assert buckets[-1].count == 1  # the current, still-in-progress hour
+        for earlier, later in zip(buckets, buckets[1:], strict=False):
+            assert later.hour - earlier.hour == timedelta(hours=1)
+
+
+def test_state_change_counts_by_hour_default_window_is_24_hours() -> None:
+    with EventStore(":memory:") as store:
+        assert len(store.state_change_counts_by_hour()) == 24
 
 
 def test_actor_classification_round_trips_and_upserts() -> None:

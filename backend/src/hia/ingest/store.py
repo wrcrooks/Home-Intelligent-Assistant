@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -148,6 +148,15 @@ class LatestState:
     attributes: dict[str, object] | None
     last_changed: datetime | None
     last_updated: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class HourlyActivity:
+    """One bar of the frontend's activity chart: how many ``state_changed``
+    rows landed in this hour-aligned bucket (UTC)."""
+
+    hour: datetime
+    count: int
 
 
 class EventStore:
@@ -349,6 +358,35 @@ class EventStore:
                 last_updated=r[4],
             )
             for r in rows
+        ]
+
+    def state_change_counts_by_hour(self, *, hours: int = 24) -> list[HourlyActivity]:
+        """State-change counts bucketed by hour, oldest first, covering the
+        trailing ``hours`` window (default 24) up to and including the current,
+        still-in-progress hour — the frontend's activity chart. Every bucket in
+        the window is present, including ones with zero rows: a quiet hour is
+        real information (nothing happened), not a gap the caller has to notice
+        and fill in itself."""
+        current_hour = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+        window_start = current_hour - timedelta(hours=hours - 1)
+
+        rows = self._con.execute(
+            """
+            SELECT date_trunc('hour', last_updated) AS hour, count(*)
+            FROM state_changes
+            WHERE last_updated >= ?
+            GROUP BY 1
+            """,
+            [window_start],
+        ).fetchall()
+        counts: dict[datetime, int] = dict(rows)
+
+        return [
+            HourlyActivity(
+                hour=window_start + timedelta(hours=i),
+                count=counts.get(window_start + timedelta(hours=i), 0),
+            )
+            for i in range(hours)
         ]
 
     def events_for_provenance(self) -> list[ProvenanceEvent]:

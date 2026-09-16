@@ -1,10 +1,17 @@
 import { useEffect, useState } from "react";
-import { connectLiveEvents, fetchDataQuality, fetchEntities } from "./api";
+import {
+  connectLiveEvents,
+  fetchDataQuality,
+  fetchEntities,
+  fetchHourlyActivity,
+} from "./api";
 import { applyStateChanged } from "./entityStore";
+import { applyLiveStateChange } from "./activityStore";
 import { ConnectionBadge } from "./components/ConnectionBadge";
 import { EntityList } from "./components/EntityList";
 import { DataQualityView } from "./components/DataQualityView";
-import type { LatestState, QualityReport } from "./types";
+import { ActivityChart } from "./components/ActivityChart";
+import type { HourlyActivity, LatestState, QualityReport } from "./types";
 
 type Tab = "entities" | "data-quality";
 
@@ -19,11 +26,18 @@ const DATA_QUALITY_POLL_MS = 10_000;
 // instead. 10s is frequent enough to feel live for a report that summarises
 // slow-moving things (totals, staleness), without hammering the API.
 
+const ACTIVITY_POLL_MS = 60_000;
+// Unlike the quality report, activity counts are updated live in real time from
+// the same WebSocket relay entities use (activityStore's applyLiveStateChange) —
+// this poll only exists to pick up the initial 24h of history on load and to
+// roll the bucket window forward as hours pass, so a minute is plenty.
+
 export default function App() {
   const [tab, setTab] = useState<Tab>("entities");
   const [entities, setEntities] = useState<LatestState[]>([]);
   const [entitiesError, setEntitiesError] = useState<string | null>(null);
   const [report, setReport] = useState<QualityReport | null>(null);
+  const [activity, setActivity] = useState<HourlyActivity[] | null>(null);
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
@@ -32,7 +46,10 @@ export default function App() {
       .catch((err: unknown) => setEntitiesError(String(err)));
 
     const disconnect = connectLiveEvents(
-      (message) => setEntities((prev) => applyStateChanged(prev, message)),
+      (message) => {
+        setEntities((prev) => applyStateChanged(prev, message));
+        setActivity((prev) => (prev ? applyLiveStateChange(prev, message) : prev));
+      },
       setConnected,
     );
     return disconnect;
@@ -52,6 +69,25 @@ export default function App() {
     }
     poll();
     const interval = setInterval(poll, DATA_QUALITY_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    function poll(): void {
+      fetchHourlyActivity()
+        .then((a) => {
+          if (!cancelled) setActivity(a);
+        })
+        .catch(() => {
+          // Same posture as the data-quality poll above: transient, next poll retries.
+        });
+    }
+    poll();
+    const interval = setInterval(poll, ACTIVITY_POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -93,7 +129,10 @@ export default function App() {
             <EntityList entities={entities} />
           </>
         ) : (
-          <DataQualityView report={report} />
+          <div className="space-y-6">
+            <ActivityChart data={activity} />
+            <DataQualityView report={report} />
+          </div>
         )}
       </main>
     </div>

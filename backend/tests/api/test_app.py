@@ -74,6 +74,24 @@ def test_data_quality_reports_totals(tmp_path: Path) -> None:
     assert body["tracked_entities"] == 1
 
 
+def test_state_changes_hourly_is_zero_filled_over_24_hours(tmp_path: Path) -> None:
+    """make_state_changed_watched's rows land in whatever hour the fixed test
+    clock (2026-09-15T12:00:00Z) happens to be, which is almost certainly
+    outside the *real* trailing-24h window at test-run time — so this only
+    checks the shape (24 zero-filled hourly buckets), not that the write shows
+    up; test_store.py's own test covers the counting logic against a real
+    "now" directly."""
+    EventStore(tmp_path / "hia.duckdb").close()
+
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        response = client.get("/api/state-changes/hourly")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 24
+    assert all(b["count"] == 0 for b in body)
+
+
 def test_serving_with_no_prior_data_starts_cleanly_with_an_empty_store(
     tmp_path: Path,
 ) -> None:

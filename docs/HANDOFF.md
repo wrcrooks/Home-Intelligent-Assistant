@@ -801,6 +801,47 @@ store read-only, same as slice 1.
 `test_classify.py`, `test_report.py`, `tests/ingest/test_store.py`,
 `tests/ha/test_registry.py`), ruff and mypy `--strict` both clean.
 
+### Small addition — the 24h activity chart
+
+Not part of any phase's exit criterion, just a small observability improvement
+requested directly: the Data quality tab now leads with a bar chart of
+state-change counts per hour over the trailing 24 hours.
+
+`EventStore.state_change_counts_by_hour(hours=24)` (`hia.ingest.store`) buckets
+by `date_trunc('hour', last_updated)` and — deliberately — zero-fills every
+bucket in the window rather than only returning hours that have rows, so a
+quiet hour reads as "nothing happened" in the chart, not as a gap in the data.
+Exposed as `GET /api/state-changes/hourly`. The frontend (`ActivityChart.tsx`)
+is a plain CSS/flexbox bar chart, no new npm dependency — this project has no
+charting library yet and one bar chart doesn't justify adding one.
+
+**Updates live, not by polling**, matching entities: `activityStore.ts`'s
+`applyLiveStateChange` increments the current hour's bucket directly from the
+same WebSocket relay `entityStore.ts` already consumes, the instant a
+`state_changed` message arrives — verified live, not assumed, by watching the
+real house's current-hour bar visibly grow (8 → 10 state changes) between two
+screenshots taken seconds apart. A 60s poll (`fetchHourlyActivity`, much
+coarser than data-quality's 10s) exists only to load the initial 24h of history
+on page load and to roll the bucket window forward as hours pass — everything
+in between is push-driven. One real subtlety worth not re-deriving: bucket
+alignment must use `setUTCMinutes`, not `setMinutes` — the backend buckets a
+`TIMESTAMPTZ` column in UTC via `date_trunc`, and local-time truncation would
+misalign for any viewer in a non-whole-hour timezone offset (e.g. India,
+UTC+5:30).
+
+**Verified live end-to-end against the real house**, not just synthetically:
+a throwaway `hia serve` (a separate port and a fresh, empty `HIA_DATA_DIR` —
+never touching the ongoing soak test's store or process) was pointed at the
+same real HA instance, and a Playwright chromium screenshot (same isolated
+scratch-npm-project fallback pattern as P2, `chromium-cli` still unavailable in
+this environment) confirmed the chart renders correctly, with no console
+errors, and genuinely updates live as the real house generates activity.
+
+83/83 → 86/86 backend tests passing (3 new: `test_state_change_counts_by_hour_*`
+in `tests/ingest/test_store.py`, `test_state_changes_hourly_*` in
+`tests/api/test_app.py`), 4/4 → 8/8 frontend tests passing (4 new:
+`activityStore.test.ts`), eslint/tsc/vitest/`vite build` all clean.
+
 ## What to do next
 
 1. ~~Confirm the CI hang is actually fixed~~ — **done**: the push containing

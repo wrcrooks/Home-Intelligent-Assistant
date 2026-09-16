@@ -25,7 +25,7 @@ from hia.api.state import AppState
 from hia.config import Settings
 from hia.ha.client import HomeAssistantClient
 from hia.ingest.quality import QualityReport, build_report
-from hia.ingest.store import EventStore, LatestState
+from hia.ingest.store import EventStore, HourlyActivity, LatestState
 from hia.logging import get_logger
 from hia.provenance.actors import ActorClass
 
@@ -91,6 +91,15 @@ def create_app(settings: Settings) -> FastAPI:
     async def data_quality() -> QualityReport:
         state: AppState = app.state.hia
         return await state.run_db(build_report)
+
+    @app.get("/api/state-changes/hourly")
+    async def state_changes_hourly() -> list[HourlyActivity]:
+        """The frontend's activity chart: state-change counts for each of the
+        trailing 24 hours, zero-filled — see
+        EventStore.state_change_counts_by_hour's own docstring for why every
+        hour is present rather than only the ones with rows."""
+        state: AppState = app.state.hia
+        return await state.run_db(lambda store: store.state_change_counts_by_hour())
 
     @app.get("/api/provenance/actors")
     async def list_actors() -> list[ActorRow]:
