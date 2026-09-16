@@ -155,6 +155,21 @@ async def test_events_delivered_while_a_later_subscription_is_still_pending(
 async def test_drops_events_under_backpressure_instead_of_blocking(
     fake_ha: tuple[FakeHomeAssistant, str],
 ) -> None:
+    """Wraps the *consumer* (`anext(events_iter)`) in a Task and awaits the push
+    side directly -- the exact inverse of every other test in this file, which
+    task-wraps the side action (`push_soon`) and awaits `anext` directly in the
+    test's own coroutine. That inversion is what hung this test indefinitely on
+    GitHub Actions' Linux runners (never reproduced locally, even with the same
+    pytest-timeout plugin installed): wrapping a live async-generator `anext()`
+    call in a Task, then relying on cancelling *that* Task from the outside
+    (originally via `asyncio.wait_for`) to unwind it, raced against the
+    generator's own `finally:` cleanup (cancelling its reader task) in a way
+    that occasionally never resolved. Rewritten to match the proven pattern used
+    everywhere else in this file -- direct `await anext(events_iter)` in the
+    test's own coroutine, `push_soon` as the background task -- removes the
+    inverted wrap-and-cancel structure instead of trying to outrace it.
+    pytest-timeout (pyproject.toml) remains as the suite-wide safety net for
+    anything like this that recurs."""
     server, base_url = fake_ha
     async with aiohttp.ClientSession() as session:
         client = HomeAssistantClient(
@@ -162,22 +177,18 @@ async def test_drops_events_under_backpressure_instead_of_blocking(
         )
         events_iter = client.events(["state_changed"])
         try:
-            consume_task = asyncio.create_task(anext(events_iter))
 
-            await server.wait_for_subscriptions(1)
-            for i in range(10):
-                await server.push_event("state_changed", _state_changed_data(f"sensor.s{i}"))
-            await asyncio.sleep(0.2)  # let the reader task drain the socket into the queue
+            async def push_soon() -> None:
+                await server.wait_for_subscriptions(1)
+                for i in range(10):
+                    await server.push_event(
+                        "state_changed", _state_changed_data(f"sensor.s{i}")
+                    )
 
-            # Bounded, not an unguarded `await consume_task`: this line hung
-            # indefinitely on GitHub Actions' Linux runners (never reproduced
-            # locally) and silently burned the platform's 6-hour job-execution
-            # ceiling on every CI run for a day before being noticed --
-            # pytest-timeout (pyproject.toml) is the suite-wide safety net now,
-            # but this bound turns a recurrence of this exact race into an
-            # immediate, specific TimeoutError pointing right at the stuck
-            # await, rather than a generic thread-dump from the global timeout.
-            first = await asyncio.wait_for(consume_task, timeout=5)
+            pusher = asyncio.create_task(push_soon())
+            first = await anext(events_iter)
+            await pusher
+
             assert first.seq == 1
             assert client.dropped_event_count > 0
         finally:

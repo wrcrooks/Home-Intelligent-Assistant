@@ -22,35 +22,59 @@ regardless of what had since been pushed or how many times "Rebuild" was clicked
 All four are detailed in the P2 packaging section below, each verified by
 reproducing it (not just reasoning about it) before trusting the fix.
 
-**A real CI incident, found and fixed the same day**: the backend CI job had been
-silently hanging for the full GitHub Actions 6-hour job-execution ceiling on
-*every* push since the P2 backend commit (`P2 backend: hia serve, plus a real
-client bug fixed along the way`, 2026-09-15) — burning roughly 30+ CI-hours across
-~8 pushes before the user noticed and flagged it. Root-caused via `gh run view
---log` on several of the cancelled runs, not guessed: every single one stopped
-dead in the exact same place, right after `tests/ha/test_client.py
-::test_events_delivered_while_a_later_subscription_is_still_pending` passed and
-before `test_drops_events_under_backpressure_instead_of_blocking` printed
-anything at all — a real race in that test's unguarded `await consume_task`
-(waiting for the client's queue to deliver its first event under deliberate
-backpressure) that has **never reproduced locally**, on this dev machine, in any
-number of runs — Linux GitHub-hosted runners' scheduling/timing characteristics
-expose it and a fast local Windows box doesn't. Fixed two ways: the specific
-await is now bounded (`asyncio.wait_for(..., timeout=5)`, `tests/ha/test_client.py`),
-turning a recurrence into an immediate, specific `TimeoutError` instead of an
-indefinite hang; and `pytest-timeout` (`backend/pyproject.toml`, `timeout = 30`,
-`timeout_method = "thread"` — `thread` rather than the Unix-only `signal` default,
-so this also protects local Windows runs) is now a suite-wide safety net, so *any*
-future hang anywhere in the suite fails within 30 seconds with a thread-dump
-instead of silently consuming a 6-hour CI slot. The two CI runs still in flight
-against pre-fix commits were cancelled manually (`gh run cancel`) rather than left
-to also burn 6 hours each. Verified by running the full suite (still 63/63) in an
-isolated scratch venv (`UV_PROJECT_ENVIRONMENT` pointed elsewhere) rather than the
-project's own `.venv` — deliberately, since that `.venv` was mid-soak-test with
-`hia serve` holding its `hia.exe` entry point open, and `uv sync`/`uv add` cannot
-touch a running process's own locked executable; `uv lock` (resolve-and-write-lock
-only, no install) doesn't have that problem and was used to update
-`backend/uv.lock` without disturbing the soak test.
+**A real CI incident, found and root-caused the same day**: the backend CI job
+had been silently hanging for the full GitHub Actions 6-hour job-execution
+ceiling on *every* push since the P2 backend commit (`P2 backend: hia serve,
+plus a real client bug fixed along the way`, 2026-09-15) — burning roughly
+30+ CI-hours across ~8 pushes before the user noticed and flagged it.
+Root-caused via `gh run view --log` on several of the cancelled runs, not
+guessed: every single one stopped dead in the exact same place, right after
+`tests/ha/test_client.py::test_events_delivered_while_a_later_subscription_is
+_still_pending` passed and before `test_drops_events_under_backpressure_instead
+_of_blocking` printed anything at all.
+
+**First fix (landed, verified working): `pytest-timeout`.** Added as a
+suite-wide safety net (`backend/pyproject.toml`, `timeout = 30`,
+`timeout_method = "thread"` — `thread` rather than the Unix-only `signal`
+default, so this also protects local Windows runs) so *any* future hang
+anywhere in the suite fails within 30 seconds with a full thread-dump instead of
+silently consuming a 6-hour CI slot. Pushed alone first specifically to observe
+what it revealed — and it worked exactly as intended: the next CI run finished
+in 54 seconds instead of hanging, with pytest-timeout's own thread-dump landing
+right on the stuck test.
+
+**That thread-dump was the real diagnostic.** It showed the previously-flagged
+suspect — `test_drops_events_under_backpressure_instead_of_blocking` — reliably
+failing, not intermittently: the event loop was genuinely idle
+(`selector.select()` with nothing scheduled), and the test's own captured log
+showed the reader task *had* processed all 10 pushed events and dropped 7 under
+backpressure, meaning items were sitting in the queue — yet the consumer never
+picked one up. **Root cause, found by comparing against every other test in the
+same file**: this was the *only* test in `tests/ha/test_client.py` that wraps
+the consumer (`anext(events_iter)`) in a `Task` and runs the side action (here,
+pushing events) directly in the test's own coroutine — every other test in the
+file does the exact inverse (background `Task` for the side action, direct
+`await anext(events_iter)` in the test body), and every one of those passed
+cleanly on the very same CI runs. Rewritten to match that proven pattern
+(`tests/ha/test_client.py`) — removing the task-wrap-and-cancel structure
+entirely rather than trying to patch around it (an earlier attempt bounded the
+wrapped consumer with `asyncio.wait_for(..., timeout=5)`, but that *also* hung
+until pytest-timeout's 30s net caught it, confirming the inverted wrap-and-cancel
+structure itself was the problem, not just a missing timeout). Still never
+reproduced locally on this dev machine, in any number of runs — this looks
+genuinely specific to timing/scheduling characteristics of GitHub's Linux
+runners — so the fix is justified by matching an already-proven pattern, not by
+a local repro of the failure itself.
+
+The two CI runs still in flight against pre-fix commits were cancelled manually
+(`gh run cancel`) rather than left to also burn 6 hours each. All local
+verification (full suite, ruff, mypy) was run against an isolated scratch venv
+(`UV_PROJECT_ENVIRONMENT` pointed elsewhere) rather than the project's own
+`.venv` — deliberately, since that `.venv` was mid-soak-test with `hia serve`
+holding its `hia.exe` entry point open, and `uv sync`/`uv add` cannot touch a
+running process's own locked executable; `uv lock` (resolve-and-write-lock only,
+no install) doesn't have that problem and was used to update `backend/uv.lock`
+without disturbing the soak test.
 
 **P3 slice 1 (provenance classifier, Layer 1 + Layer 2) is now built and
 verified** — synthetically against fake-HA fixtures, and with one real check
@@ -661,10 +685,12 @@ real accumulated history is real, near-term follow-up work, not done here.
 ## What to do next
 
 1. **Confirm the CI hang is actually fixed** by watching the next push's backend
-   job complete in its normal ~1 minute rather than running long — the fix
-   (`pytest-timeout` + a bounded `await` in the specific race, above) was verified
-   locally in an isolated venv, not yet by an actual green GitHub Actions run,
-   since the race itself never reproduced locally in the first place.
+   job complete green in its normal ~1 minute — `pytest-timeout` is confirmed
+   working (turned the 6-hour hang into a 54-second failure with a useful
+   thread-dump), and the test rewrite that removed the task-wrap-and-cancel
+   pattern is verified locally, but not yet by an actual green run on GitHub's
+   own Linux runners, since the underlying race never reproduced locally in the
+   first place.
 2. **Keep `hia serve` running unattended for 72+ hours** to close out P0/P1's
    soak-test criteria for real — the one piece of verification no single session
    can complete honestly. It's already running locally against the real house as
