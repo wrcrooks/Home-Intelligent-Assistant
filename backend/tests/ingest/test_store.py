@@ -120,3 +120,34 @@ def test_state_changes_for_provenance_carries_context_columns() -> None:
         assert row.entity_id == "light.a"
         assert row.context_id == "ctx-1"
         assert row.context_parent_id == "ctx-parent"
+
+
+def test_actor_classification_round_trips_and_upserts() -> None:
+    with EventStore(":memory:") as store:
+        assert store.actor_classifications() == {}
+
+        store.set_actor_classification("user-1", "human")
+        assert store.actor_classifications() == {"user-1": "human"}
+
+        # Re-confirming replaces the prior classification rather than erroring
+        # or duplicating -- a person's role can change.
+        store.set_actor_classification("user-1", "service_account")
+        assert store.actor_classifications() == {"user-1": "service_account"}
+
+
+def test_user_event_timestamps_collects_across_both_tables() -> None:
+    with EventStore(":memory:") as store:
+        store.write_watched_event(
+            make_state_changed_watched(1, "light.a", context_user_id="user-1")
+        )
+        store.write_watched_event(
+            make_generic_watched(2, "call_service", {}, context_user_id="user-1")
+        )
+        # No context_user_id at all -- HA's automation engine, not a person --
+        # must not show up as an "observed actor".
+        store.write_watched_event(make_generic_watched(3, "automation_triggered", {}))
+
+        timestamps = store.user_event_timestamps()
+
+        assert list(timestamps.keys()) == ["user-1"]
+        assert len(timestamps["user-1"]) == 2

@@ -76,14 +76,19 @@ running process's own locked executable; `uv lock` (resolve-and-write-lock only,
 no install) doesn't have that problem and was used to update `backend/uv.lock`
 without disturbing the soak test.
 
-**P3 slice 1 (provenance classifier, Layer 1 + Layer 2) is now built and
-verified** — synthetically against fake-HA fixtures, and with one real check
-against the live house (`HomeAssistantClient`'s new REST `.get()` method,
-confirming the user's token is admin-privileged, which `05-provenance.md`'s
-Layer 2 needs). See the new "P3, slice 1" section below for what's built, what's
-still genuinely unverified (this house has no automations configured yet, so
-Layer 2's actual correlation logic hasn't been exercised against real data), and
-what slice 2 (Layer 3 + admission control) still needs.
+**P3 slice 1 (provenance classifier, Layer 1 + Layer 2) is built and verified**
+— synthetically against fake-HA fixtures, and with one real check against the
+live house (`HomeAssistantClient`'s new REST `.get()` method, confirming the
+user's token is admin-privileged, which `05-provenance.md`'s Layer 2 needs).
+**Slice 2, part 1 (Layer 3 actor classification, backend only) is also now
+built and verified** — real users fetched live from the house (9 real accounts,
+including a second human user beyond the owner), plus two real bugs found and
+fixed on this dev machine (a FastAPI/`from __future__ import annotations`
+interaction that silently broke the confirm endpoint's request body, and a
+`TestClient`-plus-outbound-async-I/O hang in the same category `test_state.py`
+already documents). The frontend tagging page and admission control
+(`automation_share`) are still not built. See "P3, slice 1" and "P3, slice 2
+(part 1)" below for the detail.
 
 ### P0 — the Home Assistant client
 
@@ -682,6 +687,120 @@ real accumulated history is real, near-term follow-up work, not done here.
 
 44/44 → 63/63 tests passing (19 new), ruff and mypy `--strict` both clean.
 
+### P3, slice 2 (part 1) — Layer 3 actor classification, backend only
+
+Builds the backend half of Layer 3 (docs/05-provenance.md §4): the "UI lists all
+HA users alongside any user IDs seen in the event stream and asks the owner to
+tag them" setup task. **The frontend tagging page itself is not built yet** —
+deliberately split further, since the backend (storage, suggestion heuristics,
+API) is independently valuable and testable without it (the CLI and `curl` can
+already drive the whole flow), matching this project's established pattern of
+splitting a phase at whatever boundary is actually verifiable on its own.
+Admission control (`automation_share`, collision detection, §6) is also still
+deferred to a later pass — it needs Layer 3 classifications to exist first, which
+this pass is what produces.
+
+**A real design gap found and resolved before writing any code**: slice 1's
+`classify()` treated *any* resolved chain origin — including a bare
+`call_service`, which fires for a human clicking something in the app exactly as
+much as for an automation — as machine-caused. That was too broad; a human UI
+action needed to stop being misclassified as `automation`. The fix follows from
+how HA's context actually propagates, checked directly rather than assumed: a
+`call_service`/`script_started` event a *person* triggers directly carries
+*that person's own* `context_user_id` on itself; one HA's automation engine
+fires on its own conditions carries none at all. So Layer 1's `ChainOrigin` now
+also carries the origin event's own `context_user_id`, and `classify()` looks it
+up against Layer 3's confirmed classifications to decide `human_ui` /
+`human_voice` / `automation_external` / `automation_ha` — abstaining
+(`unknown`) if the user_id has no confirmed classification yet, never guessing.
+`ProvenanceKind` grew from the slice-1 binary (`automation`/`unknown`) to five
+values; `human_physical`/`device_local`/`hia_self` remain deliberately out of
+reach — see `classify.py`'s own module docstring for exactly why each one is
+still unclassifiable and what would need to change first.
+
+`hia.provenance.actors` (new): `ActorClass` (`human` | `voice_bridge` |
+`service_account`) and `suggest_actor_class()` — three heuristics from
+docs/05-provenance.md §4, strongest first: HA's `system_generated` flag, name
+matching (split into automation-tool names → `service_account` vs.
+voice/smart-home-bridge names → `voice_bridge`, rather than docs' one
+undifferentiated list, since those two cases need different classifications),
+and `temporal_regularity()` — normalized Shannon entropy of an actor's
+time-of-day distribution, low entropy suggesting automation-like timing. **Never
+writes a classification itself** — docs are explicit the regularity test is a
+suggestion, not a verdict, and this module extends that principle to all three
+heuristics: `EventStore.set_actor_classification` is only ever called from the
+API's `POST` handler (an owner's actual confirmation) or the `hia
+actors-confirm` CLI command, nowhere else.
+
+`hia.ingest.store.EventStore` gained `actor_classifications` (new table,
+upserted, only ever holds owner-confirmed entries), `set_actor_classification`,
+and `user_event_timestamps` (every observed `context_user_id` across both
+tables, mapped to its timestamps — regularity's raw material).
+
+`hia.ha.registry` gained `fetch_users` (`config/auth/list`) — confirmed by
+reading `homeassistant/components/config/auth.py` directly, not assumed; also
+requires an admin token, same as the automation-config REST endpoint. Degrades
+to an empty list on a non-admin token, like floors/labels, rather than breaking
+the whole registry sync.
+
+`hia.api.actors.build_actors_payload` merges HA's live user list with observed
+event counts, a suggestion, and any confirmed classification — also flags a
+`context_user_id` seen in history that isn't in HA's own user registry at all (a
+stale/deleted account, or a degraded fetch) rather than silently dropping it.
+Exposed as `GET /api/provenance/actors` and `POST
+/api/provenance/actors/{user_id}` (`hia.api.app`), plus `hia actors` / `hia
+actors-confirm` CLI equivalents for headless use ahead of the frontend.
+
+**A real, reproducible-on-this-machine bug found and fixed while wiring the API**
+(unrelated to Layer 3 itself, but found because of it): `ConfirmActorRequest`
+was originally a `BaseModel` defined *inside* `create_app()`, like every other
+route handler's locals. With `from __future__ import annotations` active
+file-wide, FastAPI could not resolve that locally-scoped class from the route
+function's string annotation (it isn't in the function's `__globals__`) —
+every `POST` 422'd with `"Field required"` on a phantom query parameter named
+`body`, silently never reading the actual JSON body at all. Reproduced directly
+(a debug script hitting the route showed the exact 422), not inferred from
+reading the code. Fixed by moving `ConfirmActorRequest` to module scope, with a
+comment explaining why it must stay there.
+
+**A second real, reproducible-on-this-machine issue, same category as
+`test_state.py`'s documented one**: an automated test driving `GET
+/api/provenance/actors` through a real `TestClient` request hung indefinitely
+(caught by `pytest-timeout`, not by guesswork). Isolated by calling
+`build_actors_payload()` directly against the same fake HA server outside
+`TestClient` — passes in well under a second — confirming the hang is
+`TestClient`'s cross-thread portal bridge fighting with a route handler that
+itself performs genuine outbound async I/O (a fresh `HomeAssistantClient`
+connecting out mid-request), not a bug in the route logic. Same root cause
+category `test_state.py` already documented for `AppState.ingest_and_relay`,
+now confirmed to generalize to any route that makes its own outbound HA call,
+not just the WebSocket relay. Worked around the same way: the merge logic is
+tested directly (`tests/api/test_actors.py`), the `GET` route's wiring is
+trusted from reading it, and only the `POST` route (which never calls out to
+HA) is driven through a real `TestClient` request.
+
+**Verified live against the real house**: `config/auth/list` was exercised for
+real, not just against the fake server — returned all 9 real HA user accounts
+(the owner, a second real human account, `Supervisor`/`Home Assistant
+Content`/`Home Assistant Cast` as `system_generated=True`, and four `ThinkSmart`
+device accounts) with every field this project's `UserRegistryEntry` model
+declares present and correctly typed. Confirms the endpoint and the field
+shapes for real. **A genuine, useful finding, not a gap to silently paper
+over**: the four `ThinkSmart` accounts match none of the three suggestion
+heuristics (not `system_generated`, no name-hint match, no event history yet to
+compute regularity from) — they'd correctly surface in the UI as "no heuristic
+matched," needing the owner's manual judgment, exactly as docs/05-provenance.md
+§4 frames these heuristics: suggestions for a two-minute review, not an
+exhaustive classifier. The `hia serve` soak test was left running throughout
+(not interrupted) — `hia actors`/`hia provenance-report` against the real
+accumulated store remains the next real-data check once it's safe to open the
+store read-only, same as slice 1.
+
+63/63 → 83/83 tests passing (20 new: `tests/provenance/test_actors.py`,
+`tests/api/test_actors.py`, plus additions to `tests/provenance/test_chain.py`,
+`test_classify.py`, `test_report.py`, `tests/ingest/test_store.py`,
+`tests/ha/test_registry.py`), ruff and mypy `--strict` both clean.
+
 ## What to do next
 
 1. ~~Confirm the CI hang is actually fixed~~ — **done**: the push containing
@@ -699,28 +818,50 @@ real accumulated history is real, near-term follow-up work, not done here.
    `hia provenance-report`) cannot run at the same time regardless.
 3. **Run `hia provenance-report` against real accumulated history** once the
    store can safely be opened read-only (after the soak test above, or against a
-   separate `HIA_DATA_DIR`) — the classifier itself is only verified
-   synthetically plus one real REST smoke test so far (P3 slice 1, above); this
-   is the natural next real-data check, same category as the soak test.
+   separate `HIA_DATA_DIR`) — the classifier's logic is fully covered
+   synthetically, and its live-only inputs (automation config REST, user
+   registry) are each independently verified for real, but the whole pipeline
+   running end-to-end against real accumulated history hasn't been checked yet;
+   this is the natural next real-data check, same category as the soak test.
 4. **This real house has no HA automations configured at all** (confirmed via
    `hia registry`) — Layer 2 correlation has nothing to correlate against here
    until some exist. If the user adds even one automation, `hia
    ha.automations.fetch_targets`'s actual *success* path (not just its 404
    path, which is all that's verified so far) becomes checkable for real. Worth
    asking about, not assuming.
-5. **P3 slice 2 — Layer 3 (actor classification) and admission control**
-   (`docs/05-provenance.md` §4 Layer 3, §6): classify every observed `user_id`
-   as human/voice-bridge/service-account, the setup UI for tagging HA users, the
-   temporal-regularity heuristic, and `automation_share`-based admission
-   control. This is what upgrades slice 1's `unknown` rows into the full
-   taxonomy (`human_physical`/`human_ui`/etc. from §2) and is a prerequisite for
-   the actual P3 exit criterion (a hand-labelled 200-row sample at >95%
-   precision) — that validation needs real accumulated, Layer-3-classified
-   history and manual labelling, neither of which exist yet.
-6. Consider running `/run-skill-generator` to capture the Playwright-based
+5. **P3 slice 2, part 1 (Layer 3 backend) is done** — classification storage,
+   suggestion heuristics, and the API/CLI to confirm one are all built and
+   verified, including a live check against the real house's 9 real user
+   accounts. What's left of slice 2:
+   - **The frontend tagging page.** `GET /api/provenance/actors` and `POST
+     /api/provenance/actors/{user_id}` are ready to build against — a table of
+     users with their suggestion, a confirm control, and the "0 events so far"
+     case handled gracefully. The real house has two genuine human users (the
+     owner and one other) plus four `ThinkSmart` device accounts that need a
+     manual call — a real, not hypothetical, two-minute setup task once this
+     exists.
+   - **Admission control** (`docs/05-provenance.md` §6): trailing-30-day
+     `automation_share` per entity, the exclusion thresholds, and collision
+     detection. Needs Layer 3 classifications to exist first (done), so this is
+     now unblocked.
+   - **`human_physical`/`device_local`** remain unclassifiable — see
+     `classify.py`'s own docstring. The per-entity `device_local` opt-in list
+     `05-provenance.md` §4 describes is what would resolve this, and isn't
+     built.
+   - The actual P3 exit criterion (a hand-labelled 200-row sample at >95%
+     precision, including 20+ sun/time-triggered changes) still needs real
+     accumulated, Layer-3-classified history and manual labelling — neither
+     exists yet; this is the natural target once the tagging UI exists and the
+     soak test has run a while.
+6. **Once the store can be read again, try `hia actors` for real** — the live
+   `config/auth/list` fetch is verified, but merging it against real event
+   history (event counts, and whether the `ThinkSmart` accounts' regularity
+   score says anything once they have history) has not been checked end-to-end
+   against this house yet.
+7. Consider running `/run-skill-generator` to capture the Playwright-based
    screenshot verification path as a project skill, since it wasn't available
    out of the box this time.
-7. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
+8. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
    gaps worth closing, but neither blocks P2 or P3 — track them, don't let them
    stall forward progress.
 
@@ -791,6 +932,11 @@ argument — but make the argument out loud.
 | Automation configs fetched over REST (`/api/config/automation/config/{id}`), not the websocket API | This endpoint doesn't exist over the websocket API at all — confirmed by reading HA's own `config/automation.py` source, not assumed |
 | `extract_action_targets` walks generically by key name, skipping `condition`/`conditions`/`if` | A new HA action type is silently included rather than silently missed; explicitly excluding condition blocks avoids treating an entity a `choose` block only *reads* as something it can act on |
 | Suite-wide `pytest-timeout` (30s, `thread` method) | A real race in one test hung CI for the full 6-hour job ceiling on every push for a day before being noticed; never reproduced locally, so a global safety net matters more than root-causing this one test perfectly |
+| Layer 3 classifies actors (human/voice_bridge/service_account), not full provenance kinds directly | docs/05-provenance.md §4 asks for actor-level classification specifically; classify.py maps an actor class to a taxonomy kind based on *where* the actor's user_id showed up (the origin event), not the actor alone |
+| `set_actor_classification` only ever called from an owner's actual confirmation (API `POST` or `hia actors-confirm`) | docs/05-provenance.md §4: a heuristic suggestion is never itself a classification; nothing in `hia.provenance.actors` is allowed to write one |
+| Actor name-matching splits automation tools from voice/smart-home bridges | docs lists both under one heuristic, but they need opposite classifications (`service_account` vs `voice_bridge`) — collapsing them would misclassify half the matches |
+| `ConfirmActorRequest` (Pydantic model) lives at module scope, not inside `create_app()` | Reproduced directly: with `from __future__ import annotations` active, FastAPI can't resolve a locally-scoped model's string annotation, and the route silently 422s on every request instead of reading the body |
+| Routes that make their own outbound HA call are tested by calling their logic directly, not through `TestClient` | Reproduced directly (caught by pytest-timeout): `TestClient`'s cross-thread portal bridge hangs against a route handler doing genuine outbound async I/O mid-request — the same root cause `test_state.py` already documented for the WebSocket relay, now confirmed to generalize |
 
 ## Platform facts worth not re-deriving
 

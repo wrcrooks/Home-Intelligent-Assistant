@@ -8,7 +8,7 @@ from __future__ import annotations
 import aiohttp
 
 from hia.ha.client import HomeAssistantClient
-from hia.ha.registry import fetch_all
+from hia.ha.registry import fetch_all, fetch_users
 from tests.conftest import VALID_TOKEN, FakeHomeAssistant
 
 
@@ -28,6 +28,10 @@ async def test_fetch_all_parses_known_registries_and_tolerates_missing_ones(
         "config/area_registry/list",
         [{"area_id": "kitchen", "name": "Kitchen", "floor_id": "ground"}],
     )
+    server.set_registry_response(
+        "config/auth/list",
+        [{"id": "user1", "name": "Will", "is_owner": True, "system_generated": False}],
+    )
     # Deliberately not registering config/floor_registry/list or
     # config/label_registry/list — the fake server will answer both with
     # success: false, exactly like an older Home Assistant Core that predates them.
@@ -41,3 +45,16 @@ async def test_fetch_all_parses_known_registries_and_tolerates_missing_ones(
     assert [a.area_id for a in registries.areas] == ["kitchen"]
     assert registries.floors == []
     assert registries.labels == []
+    assert [u.id for u in registries.users] == ["user1"]
+
+
+async def test_fetch_users_degrades_to_empty_list_on_a_non_admin_token(
+    fake_ha: tuple[FakeHomeAssistant, str],
+) -> None:
+    """config/auth/list requires an admin token, like the automation config REST
+    endpoint (hia.ha.automations) -- a non-admin token must not break the whole
+    registry sync, just leave actor tagging unavailable."""
+    _server, base_url = fake_ha
+    async with aiohttp.ClientSession() as session:
+        client = HomeAssistantClient(base_url, VALID_TOKEN, session=session)
+        assert await fetch_users(client) == []

@@ -20,6 +20,7 @@ from hia.ha.models import (
     EntityRegistryEntry,
     FloorRegistryEntry,
     LabelRegistryEntry,
+    UserRegistryEntry,
 )
 from hia.logging import get_logger
 
@@ -33,6 +34,7 @@ class Registries:
     areas: list[AreaRegistryEntry]
     floors: list[FloorRegistryEntry]
     labels: list[LabelRegistryEntry]
+    users: list[UserRegistryEntry]
 
 
 async def fetch_entities(client: HomeAssistantClient) -> list[EntityRegistryEntry]:
@@ -68,6 +70,22 @@ async def fetch_labels(client: HomeAssistantClient) -> list[LabelRegistryEntry]:
     return [LabelRegistryEntry.model_validate(row) for row in rows]
 
 
+async def fetch_users(client: HomeAssistantClient) -> list[UserRegistryEntry]:
+    """``config/auth/list`` — requires an admin token, same as the automation
+    config REST endpoint (hia.ha.automations); confirmed by reading
+    homeassistant/components/config/auth.py directly, not assumed. The raw
+    material for Layer 3 actor classification (docs/05-provenance.md §4).
+    Degrades to an empty list, like floors/labels, rather than failing the whole
+    sync — not every configured token will be admin-privileged, and losing actor
+    tagging is a reasonable degradation, not a reason to break basic operation."""
+    try:
+        rows = await client.call({"type": "config/auth/list"})
+    except CommandError:
+        logger.warning("user_registry_unavailable")
+        return []
+    return [UserRegistryEntry.model_validate(row) for row in rows]
+
+
 async def fetch_all(client: HomeAssistantClient) -> Registries:
     return Registries(
         entities=await fetch_entities(client),
@@ -75,4 +93,5 @@ async def fetch_all(client: HomeAssistantClient) -> Registries:
         areas=await fetch_areas(client),
         floors=await fetch_floors(client),
         labels=await fetch_labels(client),
+        users=await fetch_users(client),
     )

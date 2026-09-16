@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
 import aiohttp
 import typer
 
+from hia.api.actors import build_actors_payload
 from hia.config import Settings, get_settings
 from hia.ha.automations import fetch_targets
 from hia.ha.client import HomeAssistantClient
@@ -241,6 +243,7 @@ def _registries_to_dict(registries: Registries) -> dict[str, list[dict[str, obje
         "areas": [a.model_dump(mode="json") for a in registries.areas],
         "floors": [f.model_dump(mode="json") for f in registries.floors],
         "labels": [label.model_dump(mode="json") for label in registries.labels],
+        "users": [u.model_dump(mode="json") for u in registries.users],
     }
 
 
@@ -274,6 +277,53 @@ async def _provenance_report(settings: Settings) -> None:
     with EventStore(db_path, read_only=True) as store:
         report = build_provenance_report(store, targets)
     print(format_provenance_report(report))
+
+
+@app.command()
+def actors() -> None:
+    """List every HA user account alongside how often it's shown up in this
+    project's own history, a heuristic suggestion (never applied automatically
+    — see hia.provenance.actors), and any classification already confirmed.
+    Layer 3's setup task (docs/05-provenance.md §4) from the command line, ahead
+    of the frontend tagging UI. Opens the event store read-only — not alongside
+    `hia ingest`/`hia backfill`/`hia serve`, same constraint as `hia
+    data-quality`/`hia provenance-report`."""
+    settings = get_settings()
+    configure_logging(settings.log_level, json=settings.log_json)
+    asyncio.run(_actors(settings))
+
+
+async def _actors(settings: Settings) -> None:
+    db_path = Path(settings.data_dir) / "hia.duckdb"
+    async with aiohttp.ClientSession() as session:
+        client = _client_for(settings, session)
+        with EventStore(db_path, read_only=True) as store:
+            rows = await build_actors_payload(client, store)
+    print(json.dumps([asdict(r) for r in rows], indent=2, default=str))
+
+
+@app.command(name="actors-confirm")
+def actors_confirm(
+    user_id: str = typer.Argument(..., help="HA user id, from `hia actors`."),
+    actor_class: str = typer.Argument(
+        ..., help="One of: human, voice_bridge, service_account."
+    ),
+) -> None:
+    """Confirm one actor's classification — the CLI equivalent of `POST
+    /api/provenance/actors/{user_id}`, for headless/scripted setup ahead of the
+    frontend tagging UI. Opens the store read-write, so this cannot run at the
+    same time as `hia serve` (or any other write-mode command) against the same
+    HIA_DATA_DIR."""
+    if actor_class not in ("human", "voice_bridge", "service_account"):
+        raise typer.BadParameter(
+            "actor_class must be one of: human, voice_bridge, service_account"
+        )
+    settings = get_settings()
+    configure_logging(settings.log_level, json=settings.log_json)
+    db_path = Path(settings.data_dir) / "hia.duckdb"
+    with EventStore(db_path) as store:
+        store.set_actor_classification(user_id, actor_class)
+    logger.info("actor_classified", user_id=user_id, actor_class=actor_class)
 
 
 @app.command()

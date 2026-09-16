@@ -18,6 +18,7 @@ def _firing_event(entity_id: str, context_id: str = "ctx-fire") -> ProvenanceEve
         time_fired=_T,
         context_id=context_id,
         context_parent_id=None,
+        context_user_id=None,
         data={"entity_id": entity_id},
     )
 
@@ -62,14 +63,20 @@ def test_picks_the_nearest_prior_firing_when_several_exist() -> None:
     firings = automation_firings(
         [
             ProvenanceEvent(
-                "automation_triggered", _T, "ctx-1", None, {"entity_id": "automation.a"}
+                event_type="automation_triggered",
+                time_fired=_T,
+                context_id="ctx-1",
+                context_parent_id=None,
+                context_user_id=None,
+                data={"entity_id": "automation.a"},
             ),
             ProvenanceEvent(
-                "automation_triggered",
-                _T + timedelta(seconds=3),
-                "ctx-2",
-                None,
-                {"entity_id": "automation.a"},
+                event_type="automation_triggered",
+                time_fired=_T + timedelta(seconds=3),
+                context_id="ctx-2",
+                context_parent_id=None,
+                context_user_id=None,
+                data={"entity_id": "automation.a"},
             ),
         ]
     )

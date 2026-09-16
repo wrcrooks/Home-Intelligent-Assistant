@@ -19,6 +19,7 @@ def make_state_changed_watched(
     new_state: str | None = "on",
     old_state: str | None = None,
     resumed_after_gap: bool = False,
+    context_id: str = "ctx-1",
     context_user_id: str | None = None,
     context_parent_id: str | None = None,
 ) -> WatchedEvent:
@@ -55,7 +56,7 @@ def make_state_changed_watched(
         },
         origin="LOCAL",
         time_fired=_NOW,
-        context=Context(id="ctx-1", parent_id=context_parent_id, user_id=context_user_id),
+        context=Context(id=context_id, parent_id=context_parent_id, user_id=context_user_id),
     )
     return WatchedEvent(seq=seq, resumed_after_gap=resumed_after_gap, event=event)
 
@@ -66,12 +67,14 @@ def make_generic_watched(
     data: dict[str, object],
     *,
     resumed_after_gap: bool = False,
+    context_id: str = "ctx-2",
+    context_user_id: str | None = None,
 ) -> WatchedEvent:
     event = HAEvent(
         event_type=event_type,
         data=data,
         origin="LOCAL",
         time_fired=_NOW,
-        context=Context(id="ctx-2"),
+        context=Context(id=context_id, user_id=context_user_id),
     )
     return WatchedEvent(seq=seq, resumed_after_gap=resumed_after_gap, event=event)

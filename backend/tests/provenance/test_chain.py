@@ -10,9 +10,21 @@ from hia.provenance.chain import ContextChainResolver
 _T = datetime(2026, 9, 16, 12, 0, 0, tzinfo=UTC)
 
 
-def _event(event_type: str, context_id: str, parent_id: str | None, **data: object) -> ProvenanceEvent:
+def _event(
+    event_type: str,
+    context_id: str,
+    parent_id: str | None,
+    *,
+    user_id: str | None = None,
+    **data: object,
+) -> ProvenanceEvent:
     return ProvenanceEvent(
-        event_type=event_type, time_fired=_T, context_id=context_id, context_parent_id=parent_id, data=data
+        event_type=event_type,
+        time_fired=_T,
+        context_id=context_id,
+        context_parent_id=parent_id,
+        context_user_id=user_id,
+        data=data,
     )
 
 
@@ -55,6 +67,20 @@ def test_climbs_multiple_hops_to_find_the_outermost_automation() -> None:
     assert origin.kind == "automation"
     assert origin.entity_id == "automation.porch"
     assert origin.depth == 1
+
+
+def test_origin_carries_the_originating_events_own_context_user_id() -> None:
+    """Layer 3 (hia.provenance.actors) needs this: a call_service fired directly
+    by a person (the app, a "run script now" click) carries that person's own
+    user_id on *this* event -- the signal that distinguishes it from HA's
+    automation engine firing a service call on its own, which carries none."""
+    events = [_event("call_service", "ctx-1", None, user_id="user-abc", domain="light", service="turn_on")]
+    resolver = ContextChainResolver(events)
+
+    origin = resolver.resolve(context_id="ctx-1", context_parent_id=None)
+
+    assert origin is not None
+    assert origin.context_user_id == "user-abc"
 
 
 def test_returns_none_when_context_matches_nothing_recorded() -> None:

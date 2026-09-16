@@ -48,6 +48,13 @@ class ChainOrigin:
     depth: int
     """How many context hops were climbed to reach this origin. 0 means the
     classified row's own context_id (or its immediate parent) matched directly."""
+    context_user_id: str | None
+    """The *originating* event's own context_user_id — Layer 3's input
+    (hia.provenance.actors). A person acting directly (the app, a "run script
+    now" click) carries their own user_id here; HA's automation engine firing on
+    its own conditions carries none. Not necessarily the same as the user_id on
+    the row being classified — this is the ancestor's, which is the one that
+    actually says who (or what) caused the chain to start."""
 
 
 def _as_origin(event: ProvenanceEvent, depth: int) -> ChainOrigin:
@@ -60,7 +67,10 @@ def _as_origin(event: ProvenanceEvent, depth: int) -> ChainOrigin:
     )
     entity_id = event.data.get("entity_id")
     return ChainOrigin(
-        kind=kind, entity_id=entity_id if isinstance(entity_id, str) else None, depth=depth
+        kind=kind,
+        entity_id=entity_id if isinstance(entity_id, str) else None,
+        depth=depth,
+        context_user_id=event.context_user_id,
     )
 
 

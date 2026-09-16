@@ -38,15 +38,20 @@ text kept every rebuild reusing the first cached clone) — all detailed in
 `docs/HANDOFF.md`. **P0, P1 and P2 are all done.** `hia serve` is running against
 a real house right now for the 72-hour soak test — do not kill it to run something
 else against the same data directory. **P3 (provenance classifier) is split into
-two slices; slice 1 — `hia.provenance`, Layer 1 context-chain resolution and
-Layer 2 automation-fire correlation — is built and verified** (synthetically, plus
-one real REST check confirming the configured token is admin-privileged, which
-Layer 2's automation-config fetch needs). It deliberately classifies only
-`automation`/`unknown`, never `human` — see `hia.provenance.classify`'s docstring
-for why. Slice 2 (Layer 3 actor classification, the tagging UI, admission
-control) is next. See [docs/HANDOFF.md](docs/HANDOFF.md) for the detail, including
-a real reconnect bug in the P0 client found and fixed during P2 (HA can interleave
-`event` messages with `subscribe_events` results across multiple pending
+two slices; slice 1** (Layer 1 context-chain resolution, Layer 2 automation-fire
+correlation) **and slice 2 part 1** (Layer 3 actor classification backend —
+storage, suggestion heuristics, API/CLI) **are both built and verified** —
+synthetically, plus real checks against the live house (an admin-token REST
+confirmation, and a live fetch of all 9 real HA user accounts including a
+second real human user). `classify()` now outputs the taxonomy
+(`human_ui`/`human_voice`/`automation_ha`/`automation_external`) wherever an
+actor is owner-confirmed, still abstaining to `unknown` otherwise — see
+`hia.provenance.classify`'s docstring for exactly which classes remain out of
+reach and why. Still missing from slice 2: the frontend tagging page and
+admission control (`automation_share`). See [docs/HANDOFF.md](docs/HANDOFF.md)
+for the detail, including a real reconnect bug in the P0 client found and fixed
+during P2 (HA can interleave `event` messages with `subscribe_events` results
+across multiple pending
 subscriptions).
 
 ## Read before designing anything

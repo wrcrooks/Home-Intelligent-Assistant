@@ -88,12 +88,18 @@ Unknown rate below 15%.
 > (context-chain resolution) and Layer 2 (automation-fire correlation) — is
 > built**, verified against fake-HA fixtures and with one real check against the
 > live house (confirms the REST plumbing Layer 2 needs, and that the configured
-> token is admin-privileged). It deliberately outputs only `automation`/`unknown`,
-> never `human` — CLAUDE.md's "abstain rather than guess" — since a row neither
-> layer explains needs Layer 3 (actor classification) to safely resolve. Slice
-> 2 — Layer 3, the tagging UI, and admission control — is not started; the exit
-> criterion above needs it plus real hand-labelled data neither slice alone can
-> produce.
+> token is admin-privileged). **Slice 2, part 1 — Layer 3 actor classification,
+> backend only (storage, suggestion heuristics, API/CLI) — is also built**,
+> verified live against the real house's 9 real user accounts. `classify()` now
+> outputs the full taxonomy where an actor is confirmed (`human_ui`/
+> `human_voice`/`automation_ha`/`automation_external`), still abstaining
+> (`unknown`) — CLAUDE.md's "abstain rather than guess" — for an unconfirmed
+> actor or a row with no context at all (`human_physical`/`device_local` remain
+> unclassifiable; see `hia.provenance.classify`'s docstring for why). **Still
+> missing**: the frontend tagging page, and admission control
+> (`automation_share`, collision detection, §6) — both part of slice 2, neither
+> started. The exit criterion above needs those plus real hand-labelled data
+> nothing built so far can produce.
 
 ---
 

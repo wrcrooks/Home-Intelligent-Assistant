@@ -14,9 +14,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import aiohttp
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
+from hia.api.actors import ActorRow, build_actors_payload
 from hia.api.ingress import RestrictToSupervisorMiddleware
 from hia.api.live import start_background_task, stop_background_task
 from hia.api.state import AppState
@@ -25,8 +27,21 @@ from hia.ha.client import HomeAssistantClient
 from hia.ingest.quality import QualityReport, build_report
 from hia.ingest.store import EventStore, LatestState
 from hia.logging import get_logger
+from hia.provenance.actors import ActorClass
 
 logger = get_logger(__name__)
+
+
+class ConfirmActorRequest(BaseModel):
+    """The POST body for confirming an actor's classification. Deliberately
+    module-level, not a local class inside `create_app` (every other route
+    handler here is nested there): reproduced directly on this dev machine —
+    with `from __future__ import annotations` active, FastAPI cannot resolve a
+    locally-scoped Pydantic model's string annotation (it isn't in the
+    function's `__globals__`), silently treats the body param as a query
+    param instead, and every request 422s with "Field required" on `body`."""
+
+    actor_class: ActorClass
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -34,10 +49,10 @@ def create_app(settings: Settings) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         db_path = Path(settings.data_dir) / "hia.duckdb"
         store = EventStore(db_path)  # read-write: hia serve owns ingestion itself
-        state = AppState(settings, store)
+        session = aiohttp.ClientSession()
+        state = AppState(settings, store, session)
         app.state.hia = state
 
-        session = aiohttp.ClientSession()
         client = HomeAssistantClient(
             settings.ha_url,
             settings.ha_token,
@@ -76,6 +91,34 @@ def create_app(settings: Settings) -> FastAPI:
     async def data_quality() -> QualityReport:
         state: AppState = app.state.hia
         return await state.run_db(build_report)
+
+    @app.get("/api/provenance/actors")
+    async def list_actors() -> list[ActorRow]:
+        """Layer 3's setup task (docs/05-provenance.md §4): every HA user
+        account, merged with how often it's shown up in this project's own
+        history, a heuristic suggestion, and any classification the owner has
+        already confirmed."""
+        state: AppState = app.state.hia
+        client = state.new_client()
+        return await build_actors_payload(client, state.store)
+
+    @app.post("/api/provenance/actors/{user_id}")
+    async def confirm_actor(user_id: str, body: ConfirmActorRequest) -> dict[str, str]:
+        """Records the owner's confirmation — the only place in this codebase
+        that's allowed to call ``set_actor_classification`` at all (see
+        hia.provenance.actors' module docstring: nothing computes one on its
+        own). ``user_id`` isn't validated against the live HA user list here —
+        confirming a stale/deleted account's classification is harmless and
+        the id was presumably copied from a real ``GET`` response anyway."""
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id must not be empty")
+        state: AppState = app.state.hia
+
+        def _write(store: EventStore) -> None:
+            store.set_actor_classification(user_id, body.actor_class)
+
+        await state.run_db(_write)
+        return {"status": "ok"}
 
     @app.websocket("/api/ws/events")
     async def ws_events(websocket: WebSocket) -> None:

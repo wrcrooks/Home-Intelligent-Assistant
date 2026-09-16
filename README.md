@@ -14,8 +14,10 @@ learning process and the model's reasoning visible.
 > and a confirmed install on real aarch64 HA OS hardware: the add-on builds, starts,
 > and is reachable through ingress. The repository is public. **P3 (provenance
 > classifier) is underway**: slice 1 — context-chain resolution and
-> automation-fire correlation, `hia.provenance` — is built and verified; slice 2
-> (actor classification, admission control) is next. See
+> automation-fire correlation — and slice 2's backend — actor classification
+> storage, suggestion heuristics, and the API/CLI to confirm one — are both
+> built and verified, including live checks against a real house's real user
+> accounts. Still missing: the frontend tagging page and admission control. See
 > [docs/HANDOFF.md](docs/HANDOFF.md) for exactly where things stand.
 
 ## Documents

@@ -31,8 +31,11 @@ import asyncio
 from collections.abc import AsyncIterable, Callable
 from typing import TypeVar
 
+import aiohttp
+
 from hia.api.live import ConnectionManager, state_changed_message
 from hia.config import Settings
+from hia.ha.client import HomeAssistantClient
 from hia.ha.models import WatchedEvent
 from hia.ingest.store import EventStore
 
@@ -40,11 +43,24 @@ T = TypeVar("T")
 
 
 class AppState:
-    def __init__(self, settings: Settings, store: EventStore) -> None:
+    def __init__(
+        self, settings: Settings, store: EventStore, session: aiohttp.ClientSession
+    ) -> None:
         self.settings = settings
         self.store = store
         self.db_lock = asyncio.Lock()
         self.manager = ConnectionManager()
+        self._session = session
+
+    def new_client(self) -> HomeAssistantClient:
+        """A fresh, short-lived client for a one-off call against Home
+        Assistant (the actor registry, automation configs) — reuses the
+        lifespan's own aiohttp session (connection pooling, no extra sockets)
+        rather than opening a new one per request, but is otherwise unrelated
+        to the long-lived subscription :meth:`ingest_and_relay` drives."""
+        return HomeAssistantClient(
+            self.settings.ha_url, self.settings.ha_token, session=self._session
+        )
 
     async def run_db(self, fn: Callable[[EventStore], T]) -> T:
         async with self.db_lock:

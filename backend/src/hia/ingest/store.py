@@ -79,6 +79,19 @@ CREATE TABLE IF NOT EXISTS events (
     resumed_after_gap BOOLEAN
 );
 CREATE INDEX IF NOT EXISTS idx_events_type_time ON events (event_type, time_fired);
+
+-- Layer 3 (docs/05-provenance.md §4, hia.provenance.actors): every observed
+-- context_user_id maps to at most one owner-confirmed classification. Only
+-- ever holds *confirmed* entries -- the docs are explicit that a heuristic
+-- suggestion (system_generated flag, name matching, temporal regularity) is
+-- never itself a classification, so suggestions are computed on demand and
+-- never written here.
+CREATE TABLE IF NOT EXISTS actor_classifications (
+    user_id VARCHAR PRIMARY KEY,
+    actor_class VARCHAR NOT NULL,
+    source VARCHAR NOT NULL,
+    classified_at TIMESTAMPTZ NOT NULL
+);
 """
 
 
@@ -98,12 +111,17 @@ class ProvenanceEvent:
     provenance classifier (P3, hia.provenance) is built from:
     ``automation_triggered``, ``script_started``, ``call_service``. Everything
     Layer 1's context-chain resolver and Layer 2's automation-fire correlator need
-    is here."""
+    is here. ``context_user_id`` is Layer 3's input (hia.provenance.actors): a
+    ``call_service`` or ``script_started`` event fired directly by a person (via
+    the app, a script "run now" click) carries that person's own user_id on
+    *this* event, which is what distinguishes it from one HA's automation engine
+    fired on its own — those carry no user_id at all."""
 
     event_type: str
     time_fired: datetime
     context_id: str
     context_parent_id: str | None
+    context_user_id: str | None
     data: dict[str, object]
 
 
@@ -339,7 +357,8 @@ class EventStore:
         resolver and Layer 2 automation-fire correlator are built from."""
         rows = self._con.execute(
             """
-            SELECT event_type, time_fired, context_id, context_parent_id, data
+            SELECT event_type, time_fired, context_id, context_parent_id,
+                   context_user_id, data
             FROM events
             WHERE event_type IN ('automation_triggered', 'script_started', 'call_service')
             ORDER BY time_fired
@@ -351,7 +370,8 @@ class EventStore:
                 time_fired=r[1],
                 context_id=r[2],
                 context_parent_id=r[3],
-                data=json.loads(r[4]),
+                context_user_id=r[4],
+                data=json.loads(r[5]),
             )
             for r in rows
         ]
@@ -372,6 +392,54 @@ class EventStore:
             )
             for r in rows
         ]
+
+    def set_actor_classification(
+        self, user_id: str, actor_class: str, *, source: str = "manual"
+    ) -> None:
+        """Records an owner-confirmed Layer 3 classification (hia.provenance.actors)
+        for one HA user. **Only ever call this with an owner's actual confirmation**
+        — see hia.provenance.actors' module docstring for why nothing in this
+        codebase computes one on its own. Upserts: re-confirming an actor replaces
+        the prior classification (someone's role can change) rather than erroring."""
+        self._con.execute(
+            """
+            INSERT INTO actor_classifications (user_id, actor_class, source, classified_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (user_id) DO UPDATE SET
+                actor_class = excluded.actor_class,
+                source = excluded.source,
+                classified_at = excluded.classified_at
+            """,
+            [user_id, actor_class, source, datetime.now(UTC)],
+        )
+
+    def actor_classifications(self) -> dict[str, str]:
+        """``user_id -> actor_class`` for every owner-confirmed actor."""
+        rows = self._con.execute(
+            "SELECT user_id, actor_class FROM actor_classifications"
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def user_event_timestamps(self) -> dict[str, list[datetime]]:
+        """Every observed ``context_user_id`` (across both tables) mapped to its
+        event timestamps — the raw material for hia.provenance.actors'
+        temporal-regularity suggestion heuristic. An actor who has never caused an
+        event neither table has a row for isn't in the result; that's correct,
+        there's nothing to compute regularity from."""
+        rows = self._con.execute(
+            """
+            SELECT context_user_id, last_updated FROM state_changes
+                WHERE context_user_id IS NOT NULL
+            UNION ALL
+            SELECT context_user_id, time_fired FROM events
+                WHERE context_user_id IS NOT NULL
+            ORDER BY 2
+            """
+        ).fetchall()
+        result: dict[str, list[datetime]] = {}
+        for user_id, ts in rows:
+            result.setdefault(user_id, []).append(ts)
+        return result
 
     def gap_resumption_count(self) -> int:
         """How many stored rows were the first event delivered after a client

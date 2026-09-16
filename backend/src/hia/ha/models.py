@@ -132,6 +132,22 @@ class LabelRegistryEntry(RegistryEntry):
     color: str | None = None
 
 
+class UserRegistryEntry(RegistryEntry):
+    """One row of ``config/auth/list`` — every HA user account, the raw material
+    for Layer 3 actor classification (docs/05-provenance.md §4, hia.provenance.actors):
+    a context's ``user_id`` is always one of these ids, and ``system_generated``/
+    ``name`` feed the auto-suggestion heuristics there."""
+
+    id: str
+    username: str | None = None
+    name: str
+    is_owner: bool = False
+    is_active: bool = True
+    local_only: bool = False
+    system_generated: bool = False
+    group_ids: list[str] = []
+
+
 class ConnectionState(StrEnum):
     """Lifecycle of the underlying websocket connection, exposed for callers that
     want to reflect it (e.g. a UI status dot) without reaching into client internals.

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+import aiohttp
+
 from hia.api.state import AppState
 from hia.config import Settings
 from hia.ha.models import WatchedEvent
@@ -45,40 +47,43 @@ async def _events(*watched: WatchedEvent) -> AsyncIterator[WatchedEvent]:
 
 async def test_ingest_and_relay_writes_every_event_and_broadcasts_state_changes() -> None:
     with EventStore(":memory:") as store:
-        state = AppState(Settings(_env_file=None), store)
-        fake_ws = _FakeWebSocket()
-        await state.manager.connect(fake_ws)  # type: ignore[arg-type]
+        async with aiohttp.ClientSession() as session:
+            state = AppState(Settings(_env_file=None), store, session)
+            fake_ws = _FakeWebSocket()
+            await state.manager.connect(fake_ws)  # type: ignore[arg-type]
 
-        await state.ingest_and_relay(
-            _events(
-                make_state_changed_watched(1, "light.a", new_state="on"),
-                make_generic_watched(2, "call_service", {"domain": "light"}),
+            await state.ingest_and_relay(
+                _events(
+                    make_state_changed_watched(1, "light.a", new_state="on"),
+                    make_generic_watched(2, "call_service", {"domain": "light"}),
+                )
             )
-        )
 
-        assert store.state_change_count() == 1
-        assert store.event_count() == 1
-        assert len(fake_ws.received) == 1
-        assert fake_ws.received[0]["entity_id"] == "light.a"
-        assert fake_ws.received[0]["state"] == "on"
+            assert store.state_change_count() == 1
+            assert store.event_count() == 1
+            assert len(fake_ws.received) == 1
+            assert fake_ws.received[0]["entity_id"] == "light.a"
+            assert fake_ws.received[0]["state"] == "on"
 
 
 async def test_ingest_and_relay_stores_but_does_not_broadcast_a_removed_entity() -> None:
     """new_state=None (the entity was removed) has nothing meaningful to show in a
     live view, but is still real history worth keeping."""
     with EventStore(":memory:") as store:
-        state = AppState(Settings(_env_file=None), store)
-        fake_ws = _FakeWebSocket()
-        await state.manager.connect(fake_ws)  # type: ignore[arg-type]
+        async with aiohttp.ClientSession() as session:
+            state = AppState(Settings(_env_file=None), store, session)
+            fake_ws = _FakeWebSocket()
+            await state.manager.connect(fake_ws)  # type: ignore[arg-type]
 
-        await state.ingest_and_relay(_events(make_state_changed_watched(1, "light.a", new_state=None)))
+            await state.ingest_and_relay(_events(make_state_changed_watched(1, "light.a", new_state=None)))
 
-        assert store.state_change_count() == 1
-        assert fake_ws.received == []
+            assert store.state_change_count() == 1
+            assert fake_ws.received == []
 
 
 async def test_ingest_and_relay_with_no_connected_clients_still_writes() -> None:
     with EventStore(":memory:") as store:
-        state = AppState(Settings(_env_file=None), store)
-        await state.ingest_and_relay(_events(make_state_changed_watched(1, "light.a", new_state="on")))
-        assert store.state_change_count() == 1
+        async with aiohttp.ClientSession() as session:
+            state = AppState(Settings(_env_file=None), store, session)
+            await state.ingest_and_relay(_events(make_state_changed_watched(1, "light.a", new_state="on")))
+            assert store.state_change_count() == 1
