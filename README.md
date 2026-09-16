@@ -5,18 +5,16 @@ behaves, builds a physical and behavioural model of the home from Home Assistant
 APIs, and progressively takes over automation decisions — with a web UI that makes the
 learning process and the model's reasoning visible.
 
-> **Status: P0/P1 complete; P2's app + frontend complete.** The Home Assistant
-> websocket client, a DuckDB-backed event store with recorder backfill, `hia serve`
-> (owns the store outright — ingests, serves REST reads, relays live events over a
-> WebSocket, all in one process), and a React frontend (live entity view + data
-> quality, served directly by `hia serve`) are all built, tested, and verified
-> end-to-end against real running HA instances — including a real browser rendering
-> real live updates. **Add-on packaging (`repository.yaml`, `hia/`) is built, and
-> the real build has succeeded on a real aarch64 HAOS install** — the one piece
-> this dev machine's own Docker Engine couldn't verify. The repository is now
-> public. Not yet confirmed: whether the add-on actually starts and runs after
-> that build. See [docs/HANDOFF.md](docs/HANDOFF.md) for exactly where things
-> stand.
+> **Status: P0, P1 and P2 all complete.** The Home Assistant websocket client, a
+> DuckDB-backed event store with recorder backfill, `hia serve` (owns the store
+> outright — ingests, serves REST reads, relays live events over a WebSocket, all
+> in one process), a React frontend (live entity view + data quality, served
+> directly by `hia serve`), and add-on packaging (`repository.yaml`, `hia/`) are
+> all built and verified — including a real browser rendering real live updates,
+> and a confirmed install on real aarch64 HA OS hardware: the add-on builds, starts,
+> and is reachable through ingress. The repository is public. Next up: P3, the
+> provenance classifier. See [docs/HANDOFF.md](docs/HANDOFF.md) for exactly where
+> things stand.
 
 ## Documents
 

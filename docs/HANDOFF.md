@@ -1,24 +1,26 @@
 # Handoff
 
 For an agent or developer picking this up cold. Written 2026-09-09; updated
-2026-09-15 several times as work actually landed — see the bottom of "Where things
+several times through 2026-09-16 as work actually landed — see "Where things
 stand" for the latest.
 
 ## Where things stand
 
-**P0, P1 and P2's backend+frontend are done, all verified live** — including a real
-browser rendering real live updates against a real house. **P2's packaging: the
-repository is now public** (the user's call, made after an audit found nothing
-sensitive in history), the Docker build works end-to-end against a substitute base
-image on this dev machine (three real bugs found and fixed along the way), and —
-the thing this dev machine's Docker Engine couldn't test — **the real build has now
-succeeded on a real aarch64 HAOS install** (see the P2 packaging section below for
-the Docker-Hub-connectivity error hit on the first attempt, now in
-`hia/DOCS.md`'s Troubleshooting section too). Starting it then surfaced a real
-`Permission denied` bug (the run/finish scripts weren't executable — a Windows
-dev machine doesn't track the Unix `+x` bit) — fixed, but **the fix needs a
-rebuild on the user's install to take effect; whether `hia serve` actually comes
-up through ingress after that rebuild is still the next thing to confirm.**
+**P0, P1 and P2 are all done — P2's full exit criterion is now confirmed on real
+HAOS hardware.** The add-on installs from the (now public) repository, builds, and
+runs correctly through ingress on a real aarch64 Home Assistant instance — the
+user confirmed it installed and working on 2026-09-16. Getting there surfaced four
+real bugs, none of them caught by anything short of actually testing on real
+hardware (this dev machine's Docker Engine can't pull the real base image at all):
+a Docker-Hub connectivity timeout in Supervisor's own build tooling (transient,
+just needed a retry — now documented in `hia/DOCS.md`'s Troubleshooting section),
+a missing executable bit on `run`/`finish` (Windows doesn't track the Unix `+x`
+bit), and — the one that made the executable-bit fix *look* like it hadn't worked
+— a Docker build-cache bug where the `git clone` step's unchanging instruction text
+meant every subsequent build silently kept reusing the very first cached clone,
+regardless of what had since been pushed or how many times "Rebuild" was clicked.
+All four are detailed in the P2 packaging section below, each verified by
+reproducing it (not just reasoning about it) before trusting the fix.
 
 ### P0 — the Home Assistant client
 
@@ -169,10 +171,9 @@ database that isn't a recorder database at all).
 
 ### P2, part 1 — the backend (`hia serve`)
 
-No add-on packaging (Dockerfile, `config.yaml`, s6, ingress deployment) yet — what's
-left of P2's full exit criterion ("installs on real HA OS hardware, appears in the
-sidebar"), which also needs actual HAOS hardware this session doesn't have, same
-caveat as the soak test.
+(At the time this part was written, add-on packaging — Dockerfile, `config.yaml`,
+s6, ingress deployment — didn't exist yet; that's covered in P2 part 3 below, and
+is now confirmed working on real HAOS hardware.)
 
 **The single biggest finding this pass, and it changed the architecture.** The
 original plan (`02-architecture.md`, and how P1 was scoped) was: `hia ingest` writes,
@@ -338,7 +339,7 @@ paths, not absolute ones.
 - The data-quality page polls every 10s rather than being push-driven; the live
   relay only carries `state_changed` events by design (docs/HANDOFF.md's P2 part 1).
 
-### P2, part 3 — add-on packaging (built; real build confirmed on real aarch64 HAOS)
+### P2, part 3 — add-on packaging (confirmed installed and working on real aarch64 HAOS)
 
 `repository.yaml` (repo root) and `hia/` (config.yaml, Dockerfile, rootfs, DOCS.md,
 translations/en.yaml) exist. Layout was corrected mid-build after checking a real,
@@ -512,32 +513,34 @@ several real fixes shipping — Supervisor uses it to signal an update is availa
 at all, so leaving it unchanged may also have contributed to the user not
 getting a fresh build offered.
 
-**Once this reaches the user (needs both a repository-level refresh — Settings →
-Add-ons → Add-on Store → check for updates/reload — and then rebuilding the
-add-on itself, not just "Rebuild" on its own, in case the repository-level cache
-was also involved)**, whether `hia serve` actually comes up and is reachable
-through ingress is still the next thing to confirm — permission-denied is what
-was blocking that observation, not evidence either way about what happens once
-`run` can actually execute.
+**Reached the user, and confirmed**: after the repository-level refresh (Settings →
+Add-ons → Add-on Store → check for updates/reload) and rebuilding the add-on, the
+`Permission denied` error was gone, and the user confirmed on 2026-09-16 that the
+add-on is **installed and working** — `bashio::config` reading the set options,
+`hia serve` coming up, and the add-on reachable through ingress (appears in the
+sidebar, shows live state). This is P2's full exit criterion, confirmed on real
+hardware, not assumed.
 
 ## What to do next
 
-1. **Rebuild/update the add-on on the real aarch64 install** to pick up the
-   run/finish executable-bit fix, then confirm it actually **starts and runs**:
-   `bashio::config` correctly reading the options the user set, `hia serve`
-   coming up and being reachable through ingress. The build succeeding and the
-   permission-denied fix are both confirmed; running end-to-end through ingress
-   is not, yet.
-2. **Run `hia serve` (not `hia ingest` — it supersedes it for normal operation)
+1. **Run `hia serve` (not `hia ingest` — it supersedes it for normal operation)
    against a real house for 72+ hours, unattended**, to close out P0/P1's soak-test
    criteria for real — the one piece of verification no single session can
-   complete honestly.
-3. Consider running `/run-skill-generator` to capture the Playwright-based
+   complete honestly. Now that the add-on is installed and running for real, this
+   can start immediately and run in the background while P3 work proceeds.
+2. Consider running `/run-skill-generator` to capture the Playwright-based
    screenshot verification path as a project skill, since it wasn't available
    out of the box this time.
-4. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
-   gaps worth closing, but neither blocks P2 — track them, don't let them stall
-   forward progress.
+3. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
+   gaps worth closing, but neither blocks P2 or P3 — track them, don't let them
+   stall forward progress.
+4. **Begin P3 — the provenance classifier** (`docs/04-roadmap.md`,
+   `docs/05-provenance.md`): Layer 1 (context-chain resolution) and Layer 2
+   (automation-fire correlation) first, as a verifiable first slice; Layer 3
+   (actor classification + tagging UI) and admission control (`automation_share`)
+   deferred to a second slice. Layer 2 needs research into HA's actual API for
+   fetching automation configurations (to extract action targets) — not yet
+   researched, a genuine unknown.
 
 Do not skip ahead to the interesting parts. P1 started a data clock that cannot be
 rewound — which is exactly why live ingestion was built before backfill, not after —
