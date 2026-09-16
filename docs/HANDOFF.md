@@ -684,13 +684,12 @@ real accumulated history is real, near-term follow-up work, not done here.
 
 ## What to do next
 
-1. **Confirm the CI hang is actually fixed** by watching the next push's backend
-   job complete green in its normal ~1 minute — `pytest-timeout` is confirmed
-   working (turned the 6-hour hang into a 54-second failure with a useful
-   thread-dump), and the test rewrite that removed the task-wrap-and-cancel
-   pattern is verified locally, but not yet by an actual green run on GitHub's
-   own Linux runners, since the underlying race never reproduced locally in the
-   first place.
+1. ~~Confirm the CI hang is actually fixed~~ — **done**: the push containing
+   both fixes went green in 25 seconds (backend job 21s, frontend 17s), back to
+   normal pre-incident timing. `pytest-timeout` is confirmed working end-to-end
+   (it's what turned the 6-hour hang into the 54-second diagnostic failure that
+   led to the real fix), and the test rewrite is confirmed correct on GitHub's
+   own Linux runners, not just locally.
 2. **Keep `hia serve` running unattended for 72+ hours** to close out P0/P1's
    soak-test criteria for real — the one piece of verification no single session
    can complete honestly. It's already running locally against the real house as
