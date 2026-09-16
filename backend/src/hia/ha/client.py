@@ -5,6 +5,12 @@ resubscription, and a monotonic event sequence number so consumers can detect ga
 caused by a reconnect (docs/02-architecture.md, `ha/` client). Protocol details
 (auth_required/auth/auth_ok, subscribe_events, message ids) verified against
 https://developers.home-assistant.io/docs/api/websocket/.
+
+Also carries a thin REST client (:meth:`HomeAssistantClient.get`) for the small
+number of things Home Assistant only exposes over HTTP, not the websocket API —
+currently just automation configs (``hia.ha.automations``, P3's Layer 2). Same
+token, same base host, deliberately kept on this class rather than a separate
+client so callers never juggle two connection objects for one HA instance.
 """
 
 from __future__ import annotations
@@ -55,6 +61,19 @@ def websocket_url(base_url: str) -> str:
     return urlunsplit((scheme, parts.netloc, "/api/websocket", "", ""))
 
 
+def rest_base_url(base_url: str) -> str:
+    """The same configured base URL, but as an ``http``/``https`` origin with no
+    path — for the handful of things only reachable over Home Assistant's REST
+    API, not the websocket one (e.g. ``GET /api/config/automation/config/{id}``,
+    used by ``hia.ha.automations`` — automation configs aren't exposed over the
+    websocket API at all)."""
+    parts = urlsplit(base_url)
+    scheme = {"ws": "http", "wss": "https"}.get(parts.scheme, parts.scheme)
+    if scheme not in ("http", "https"):
+        raise ValueError(f"Unsupported scheme in Home Assistant URL: {base_url!r}")
+    return urlunsplit((scheme, parts.netloc, "", "", ""))
+
+
 class HomeAssistantClient:
     """Long-lived subscriber to Home Assistant's websocket API.
 
@@ -85,6 +104,7 @@ class HomeAssistantClient:
         queue_max_size: int = 2000,
     ) -> None:
         self._url = websocket_url(base_url)
+        self._rest_base = rest_base_url(base_url)
         self._token = token
         self._session = session
         self._initial_delay = initial_delay
@@ -251,3 +271,19 @@ class HomeAssistantClient:
             if not result.get("success", False):
                 raise CommandError(f"Command {message.get('type')!r} failed: {result}")
             return result.get("result")
+
+    async def get(self, path: str) -> Any:
+        """Authenticated GET against Home Assistant's REST API — the handful of
+        things (currently just automation configs, ``hia.ha.automations``) that
+        have no websocket equivalent at all. Returns ``None`` on a 404 rather than
+        raising: a missing resource (an automation deleted between registry sync
+        and this call) is routine, not exceptional, and callers decide whether
+        that's worth logging."""
+        url = f"{self._rest_base}{path}"
+        async with self._session.get(
+            url, headers={"Authorization": f"Bearer {self._token}"}
+        ) as resp:
+            if resp.status == 404:
+                return None
+            resp.raise_for_status()
+            return await resp.json()

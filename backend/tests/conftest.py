@@ -1,7 +1,10 @@
-"""A fake Home Assistant websocket server, just complete enough to exercise
-:class:`hia.ha.client.HomeAssistantClient` without a real HA instance: the auth
-handshake, ``subscribe_events``, event delivery, registry commands, and — via
-``disconnect_all`` — forced disconnects to test reconnect and resubscription.
+"""A fake Home Assistant server, just complete enough to exercise
+:class:`hia.ha.client.HomeAssistantClient` without a real HA instance: the
+websocket auth handshake, ``subscribe_events``, event delivery, registry
+commands, forced disconnects (via ``disconnect_all``) to test reconnect and
+resubscription, and the one REST endpoint this project calls
+(``GET /api/config/automation/config/{id}``, for P3's Layer 2 automation-target
+extraction).
 """
 
 from __future__ import annotations
@@ -33,15 +36,35 @@ class FakeHomeAssistant:
     def __init__(self) -> None:
         self.app = web.Application()
         self.app.router.add_get("/api/websocket", self._handle_ws)
+        self.app.router.add_get(
+            "/api/config/automation/config/{config_id}", self._handle_automation_config
+        )
         self.sockets: list[web.WebSocketResponse] = []
         self.subscriptions: list[str] = []
         self.rejected_connections = 0
         self._registry_responses: dict[str, list[dict[str, Any]]] = {}
+        self._automation_configs: dict[str, dict[str, Any]] = {}
         self._subscription_event = asyncio.Event()
         self._interleave: tuple[str, str, dict[str, Any]] | None = None
 
     def set_registry_response(self, command: str, rows: list[dict[str, Any]]) -> None:
         self._registry_responses[command] = rows
+
+    def set_automation_config(self, config_id: str, config: dict[str, Any]) -> None:
+        """The fake equivalent of what a real
+        ``GET /api/config/automation/config/{config_id}`` returns for an
+        automation that exists (hia.ha.automations, P3's Layer 2). A ``config_id``
+        never registered here 404s, matching how a real deleted-since-registry-
+        sync automation behaves."""
+        self._automation_configs[config_id] = config
+
+    async def _handle_automation_config(self, request: web.Request) -> web.Response:
+        if request.headers.get("Authorization") != f"Bearer {VALID_TOKEN}":
+            return web.json_response({"message": "Unauthorized"}, status=401)
+        config = self._automation_configs.get(request.match_info["config_id"])
+        if config is None:
+            return web.json_response({"message": "Resource not found"}, status=404)
+        return web.json_response(config)
 
     def interleave_event_before_subscription_result(
         self, *, before_subscribing_to: str, push_event_type: str, push_data: dict[str, Any]

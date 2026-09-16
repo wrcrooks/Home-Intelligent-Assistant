@@ -22,6 +22,15 @@ regardless of what had since been pushed or how many times "Rebuild" was clicked
 All four are detailed in the P2 packaging section below, each verified by
 reproducing it (not just reasoning about it) before trusting the fix.
 
+**P3 slice 1 (provenance classifier, Layer 1 + Layer 2) is now built and
+verified** — synthetically against fake-HA fixtures, and with one real check
+against the live house (`HomeAssistantClient`'s new REST `.get()` method,
+confirming the user's token is admin-privileged, which `05-provenance.md`'s
+Layer 2 needs). See the new "P3, slice 1" section below for what's built, what's
+still genuinely unverified (this house has no automations configured yet, so
+Layer 2's actual correlation logic hasn't been exercised against real data), and
+what slice 2 (Layer 3 + admission control) still needs.
+
 ### P0 — the Home Assistant client
 
 Exit criterion verified against a real, running Home Assistant instance, not just the
@@ -521,26 +530,139 @@ add-on is **installed and working** — `bashio::config` reading the set options
 sidebar, shows live state). This is P2's full exit criterion, confirmed on real
 hardware, not assumed.
 
+### P3, slice 1 — provenance classifier, Layer 1 + Layer 2
+
+`docs/04-roadmap.md` P3 is split into two slices, matching this project's pattern
+of shipping large phases in verifiable increments: this slice builds **Layer 1**
+(context-chain resolution) and **Layer 2** (automation-fire correlation) from
+`docs/05-provenance.md` §4; **Layer 3** (per-actor classification of every
+observed `user_id`, plus the setup UI for tagging HA users) and **admission
+control** (`automation_share`, §6) are deferred to a second slice.
+
+`hia.provenance` (new):
+
+- `chain.ContextChainResolver` — Layer 1. Built once per run from every stored
+  `automation_triggered`/`script_started`/`call_service` event. Resolving a row's
+  context checks two real, live-verified shapes of HA's context propagation: the
+  row's own `context_id` matching a recorded machine event directly (the
+  **same-id-sharing** pattern confirmed live in P1 — a REST-triggered
+  `call_service` event and the `state_changed` it caused shared one `context_id`,
+  not a parent/child pair), and `context_parent_id` matching one (the **parent-id
+  chaining** pattern `05-provenance.md` §3 describes for automations). Climbs
+  through a matched event's own `context_parent_id` to find the outermost
+  ancestor (a service call nested inside an automation resolves to the
+  automation, not just the immediate call), depth-capped and cycle-guarded.
+- `correlate.AutomationCorrelator` — Layer 2, the layer that actually closes the
+  sun/time-trigger hole (`05-provenance.md` §3): since those triggers set no
+  context at all, there is nothing for Layer 1 to chain-walk. Instead this
+  correlates on *timing* — if automation `X` fires and one of its known action
+  targets changes state within a short window (default 5s) afterward, the change
+  is attributed to `X` regardless of context. Target entities are bucketed and
+  time-sorted so a lookup is a bisect, not an O(firings) scan per row classified.
+- `classify.classify()` — combines both layers. **Deliberately stops at a binary
+  output: `automation` or `unknown`**, never `human` — see the module's own
+  docstring. Without Layer 3, a row neither layer explains might be a genuine
+  human action, or might be an external automation (Node-RED, AppDaemon) whose
+  service calls carry a `user_id` and look human by context alone
+  (`05-provenance.md` §3) — this slice has no way yet to tell those apart, and
+  guessing `human` would be exactly the "abstain rather than guess" non-negotiable
+  in `CLAUDE.md` broken in the one place it matters most. `unknown` is a safe
+  default either way: Layer 3, once built, only ever *upgrades* some `unknown`s to
+  a real class, never has to walk back a wrong `automation` guess.
+- `report.py` — runs the classifier over every stored `state_changes` row and
+  summarizes it (counts by layer, top attributed automations). **Not** the P3 exit
+  criterion itself (a hand-labelled 200-row sample at >95% precision, including 20+
+  sun/time-triggered changes — needs real house data and manual labelling no
+  single session can produce, same category as P1's 72-hour soak test); this is a
+  sanity-check report, exposed as `hia provenance-report`.
+
+`hia.ha.automations` (new): fetches automation configs and extracts action
+targets — Layer 2's other input. Automation configs are **not available over the
+websocket API at all**; the only way to read one is Home Assistant's REST-only
+`config` component, `GET /api/config/automation/config/{config_id}` — confirmed by
+reading `homeassistant/components/config/automation.py` and its
+`BaseEditConfigView` base class directly (undocumented in the public REST API
+reference, which doesn't mention this endpoint). `config_id` is the automation's
+own `id` field, exposed as `unique_id` on its entity registry entry. This endpoint
+requires an **admin-privileged token** (`@require_admin`) — a new constraint no
+other part of this project has needed, since everything else goes over the
+websocket API. `extract_action_targets()` walks an automation's action block
+generically by key name (`entity_id`, wherever it appears — bare or under
+`target:`) rather than enumerating action types, so a new HA action type is
+silently included rather than silently missed; `condition`/`conditions`/`if`
+sub-blocks are explicitly skipped so an entity a `choose` block only *reads* to
+decide whether to run never shows up as a false-positive target.
+
+`hia.ha.client.HomeAssistantClient` gained `rest_base_url()` and a `.get()`
+method — a thin authenticated REST GET, alongside the existing websocket `.call()`
+— since automation configs needed one and no REST client existed yet.
+
+**Verified two ways.** Synthetically, against the fake HA fixtures (17 new tests:
+`tests/provenance/`, `tests/ha/test_automations.py`) — same-id-sharing and
+parent-id-chaining resolution, multi-hop climbing, cycle/depth guarding, the
+sun-trigger correlation scenario Layer 1 cannot see, window/entity/ordering edge
+cases for correlation, the abstain-not-guess fallthrough, and action-target
+extraction across old/new HA action syntax and nested `choose`/`parallel` blocks
+(including that a `choose` block's own `conditions` entities are correctly
+excluded from its targets). And **live, against the real house** this project has
+verified every other phase against: `HomeAssistantClient.get()` was exercised for
+real (`/api/config/automation/config/definitely-does-not-exist` → a real `None`
+from HA, not a raised exception), which also incidentally confirmed **the user's
+real long-lived token is admin-privileged** — `require_admin` rejects
+*before* checking whether an id exists, so a 404 (not a 401/403) on a
+guaranteed-nonexistent id proves admin access works, not just that the endpoint
+exists.
+
+**What's still genuinely unverified, flagged rather than glossed over**: this real
+house currently has **zero configured HA automations** (`hia registry` against it
+returned none) — so there is nothing to run the *success* path of
+`hia.ha.automations.fetch_targets` against for real, and Layer 2's actual
+correlation logic (as opposed to its REST plumbing) has only been exercised
+synthetically so far. The local `hia.duckdb` store from this dev machine's ongoing
+soak test (see "What to do next" below) is currently held read-write by a running
+`hia serve` process — deliberately left running rather than interrupted to run
+`hia provenance-report` against it, since DuckDB's one-writer-or-many-readers
+model (P2 section above) means a read-only open would just fail with "Conflicting
+lock is held" while that process is up. Running `hia provenance-report` against
+real accumulated history is real, near-term follow-up work, not done here.
+
+44/44 → 63/63 tests passing (19 new), ruff and mypy `--strict` both clean.
+
 ## What to do next
 
-1. **Run `hia serve` (not `hia ingest` — it supersedes it for normal operation)
-   against a real house for 72+ hours, unattended**, to close out P0/P1's soak-test
-   criteria for real — the one piece of verification no single session can
-   complete honestly. Now that the add-on is installed and running for real, this
-   can start immediately and run in the background while P3 work proceeds.
-2. Consider running `/run-skill-generator` to capture the Playwright-based
+1. **Keep `hia serve` running unattended for 72+ hours** to close out P0/P1's
+   soak-test criteria for real — the one piece of verification no single session
+   can complete honestly. It's already running locally against the real house as
+   of this writing (started earlier this session) — **do not kill or restart it**
+   just to run something else against the same `HIA_DATA_DIR`; DuckDB's
+   one-writer-or-many-readers model means a read-only tool (`hia data-quality`,
+   `hia provenance-report`) cannot run at the same time regardless.
+2. **Run `hia provenance-report` against real accumulated history** once the
+   store can safely be opened read-only (after the soak test above, or against a
+   separate `HIA_DATA_DIR`) — the classifier itself is only verified
+   synthetically plus one real REST smoke test so far (P3 slice 1, above); this
+   is the natural next real-data check, same category as the soak test.
+3. **This real house has no HA automations configured at all** (confirmed via
+   `hia registry`) — Layer 2 correlation has nothing to correlate against here
+   until some exist. If the user adds even one automation, `hia
+   ha.automations.fetch_targets`'s actual *success* path (not just its 404
+   path, which is all that's verified so far) becomes checkable for real. Worth
+   asking about, not assuming.
+4. **P3 slice 2 — Layer 3 (actor classification) and admission control**
+   (`docs/05-provenance.md` §4 Layer 3, §6): classify every observed `user_id`
+   as human/voice-bridge/service-account, the setup UI for tagging HA users, the
+   temporal-regularity heuristic, and `automation_share`-based admission
+   control. This is what upgrades slice 1's `unknown` rows into the full
+   taxonomy (`human_physical`/`human_ui`/etc. from §2) and is a prerequisite for
+   the actual P3 exit criterion (a hand-labelled 200-row sample at >95%
+   precision) — that validation needs real accumulated, Layer-3-classified
+   history and manual labelling, neither of which exist yet.
+5. Consider running `/run-skill-generator` to capture the Playwright-based
    screenshot verification path as a project skill, since it wasn't available
    out of the box this time.
-3. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
+6. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
    gaps worth closing, but neither blocks P2 or P3 — track them, don't let them
    stall forward progress.
-4. **Begin P3 — the provenance classifier** (`docs/04-roadmap.md`,
-   `docs/05-provenance.md`): Layer 1 (context-chain resolution) and Layer 2
-   (automation-fire correlation) first, as a verifiable first slice; Layer 3
-   (actor classification + tagging UI) and admission control (`automation_share`)
-   deferred to a second slice. Layer 2 needs research into HA's actual API for
-   fetching automation configurations (to extract action targets) — not yet
-   researched, a genuine unknown.
 
 Do not skip ahead to the interesting parts. P1 started a data clock that cannot be
 rewound — which is exactly why live ingestion was built before backfill, not after —
@@ -604,6 +726,10 @@ argument — but make the argument out loud.
 | `hia/Dockerfile` clones this repo's own source rather than referencing sibling dirs | Supervisor always uses the app's own folder as the Docker build context (confirmed from Supervisor's own source) — a Dockerfile in `hia/` cannot `COPY ../backend` no matter how the rest of the repo is laid out |
 | `base-debian`, not `base` (Alpine), for the add-on's base image | DuckDB has no musllinux wheel and needs a full C++ toolchain to build from source — verified directly by running `uv sync` inside both, not assumed |
 | `repository.yaml` and `hia/` flat at the repo root, not under `addon/` | Matches a real, current official example fetched directly; Supervisor's app-discovery convention doesn't support the nesting this project originally sketched |
+| P3 split into slice 1 (Layer 1 + Layer 2) and slice 2 (Layer 3 + admission control) | Matches this project's pattern for large phases; Layer 3 (actor classification) and the exit criterion's hand-labelled precision check both need real accumulated data slice 1 alone can't produce |
+| Slice 1's classifier outputs `automation`/`unknown`, never `human` | CLAUDE.md's "abstain rather than guess" — without Layer 3, an unexplained row could be a real human action or an external automation (Node-RED) whose context looks human (`05-provenance.md` §3); guessing `human` would recreate the exact trap the taxonomy exists to avoid |
+| Automation configs fetched over REST (`/api/config/automation/config/{id}`), not the websocket API | This endpoint doesn't exist over the websocket API at all — confirmed by reading HA's own `config/automation.py` source, not assumed |
+| `extract_action_targets` walks generically by key name, skipping `condition`/`conditions`/`if` | A new HA action type is silently included rather than silently missed; explicitly excluding condition blocks avoids treating an entity a `choose` block only *reads* as something it can act on |
 
 ## Platform facts worth not re-deriving
 

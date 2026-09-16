@@ -12,9 +12,11 @@ learning process and the model's reasoning visible.
 > directly by `hia serve`), and add-on packaging (`repository.yaml`, `hia/`) are
 > all built and verified — including a real browser rendering real live updates,
 > and a confirmed install on real aarch64 HA OS hardware: the add-on builds, starts,
-> and is reachable through ingress. The repository is public. Next up: P3, the
-> provenance classifier. See [docs/HANDOFF.md](docs/HANDOFF.md) for exactly where
-> things stand.
+> and is reachable through ingress. The repository is public. **P3 (provenance
+> classifier) is underway**: slice 1 — context-chain resolution and
+> automation-fire correlation, `hia.provenance` — is built and verified; slice 2
+> (actor classification, admission control) is next. See
+> [docs/HANDOFF.md](docs/HANDOFF.md) for exactly where things stand.
 
 ## Documents
 

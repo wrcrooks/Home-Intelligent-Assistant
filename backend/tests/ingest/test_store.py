@@ -95,3 +95,28 @@ def test_read_only_store_sees_data_written_before_it_was_opened(tmp_path: Path) 
     with EventStore(db_path, read_only=True) as reader:
         assert reader.state_change_count() == 1
         assert reader.latest_states()[0].entity_id == "light.a"
+
+
+def test_events_for_provenance_returns_only_the_three_provenance_event_types() -> None:
+    with EventStore(":memory:") as store:
+        store.write_watched_event(
+            make_generic_watched(1, "automation_triggered", {"entity_id": "automation.a"})
+        )
+        store.write_watched_event(make_generic_watched(2, "call_service", {"domain": "light"}))
+        store.write_watched_event(make_generic_watched(3, "some_other_event", {}))
+
+        rows = store.events_for_provenance()
+        assert {r.event_type for r in rows} == {"automation_triggered", "call_service"}
+        automation_row = next(r for r in rows if r.event_type == "automation_triggered")
+        assert automation_row.data == {"entity_id": "automation.a"}
+
+
+def test_state_changes_for_provenance_carries_context_columns() -> None:
+    with EventStore(":memory:") as store:
+        store.write_watched_event(
+            make_state_changed_watched(1, "light.a", context_parent_id="ctx-parent")
+        )
+        [row] = store.state_changes_for_provenance()
+        assert row.entity_id == "light.a"
+        assert row.context_id == "ctx-1"
+        assert row.context_parent_id == "ctx-parent"

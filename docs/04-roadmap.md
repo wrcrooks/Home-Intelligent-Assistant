@@ -84,6 +84,17 @@ with >95% precision on the `human` classes, **including at least 20 changes caus
 sun- or time-triggered automations** — the case that context alone cannot detect.
 Unknown rate below 15%.
 
+> Status: split into two slices (docs/HANDOFF.md). **Slice 1 — Layer 1
+> (context-chain resolution) and Layer 2 (automation-fire correlation) — is
+> built**, verified against fake-HA fixtures and with one real check against the
+> live house (confirms the REST plumbing Layer 2 needs, and that the configured
+> token is admin-privileged). It deliberately outputs only `automation`/`unknown`,
+> never `human` — CLAUDE.md's "abstain rather than guess" — since a row neither
+> layer explains needs Layer 3 (actor classification) to safely resolve. Slice
+> 2 — Layer 3, the tagging UI, and admission control — is not started; the exit
+> criterion above needs it plus real hand-labelled data neither slice alone can
+> produce.
+
 ---
 
 ### P4 — Features and twin v0 · ~3 weeks

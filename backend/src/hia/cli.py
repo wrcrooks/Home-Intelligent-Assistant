@@ -11,7 +11,8 @@ not support a read-write process coexisting with a separate read-only one (verif
 against a real Linux container; see hia.api.state's module docstring and
 docs/HANDOFF.md). ``hia ingest``/``hia backfill``/``hia data-quality`` remain as
 standalone tools, but none of them may run at the same time as ``hia serve``
-against the same data directory.
+against the same data directory. ``hia provenance-report`` (P3, first slice) runs
+the Layer 1 + Layer 2 provenance classifier (hia.provenance) over stored history.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import aiohttp
 import typer
 
 from hia.config import Settings, get_settings
+from hia.ha.automations import fetch_targets
 from hia.ha.client import HomeAssistantClient
 from hia.ha.registry import Registries, fetch_all
 from hia.ingest.backfill import run_backfill
@@ -32,6 +34,8 @@ from hia.ingest.pipeline import run_ingest
 from hia.ingest.quality import build_report, format_report
 from hia.ingest.store import EventStore
 from hia.logging import configure_logging, get_logger
+from hia.provenance.report import build_report as build_provenance_report
+from hia.provenance.report import format_report as format_provenance_report
 
 app = typer.Typer(add_completion=False, help="Home Intelligent Assistant backend CLI.")
 logger = get_logger(__name__)
@@ -238,6 +242,38 @@ def _registries_to_dict(registries: Registries) -> dict[str, list[dict[str, obje
         "floors": [f.model_dump(mode="json") for f in registries.floors],
         "labels": [label.model_dump(mode="json") for label in registries.labels],
     }
+
+
+@app.command(name="provenance-report")
+def provenance_report() -> None:
+    """Classify every stored state change with the Layer 1 (context chain) +
+    Layer 2 (automation-fire correlation) provenance classifier (docs/05-
+    provenance.md §4, hia.provenance) and print a summary. Connects to Home
+    Assistant to fetch automation configs (Layer 2's target sets) and opens the
+    event store read-only — safe alongside `hia serve`, `hia ingest`, or another
+    `hia provenance-report`, but not alongside `hia backfill`.
+
+    Layer 3 (actor classification) isn't built yet, so anything neither layer can
+    explain is reported `unknown`, not `human` — this deliberately does not
+    attempt the full docs/04-roadmap.md P3 exit criterion (a hand-labelled 200-row
+    precision check) here; see docs/HANDOFF.md."""
+    settings = get_settings()
+    configure_logging(settings.log_level, json=settings.log_json)
+    asyncio.run(_provenance_report(settings))
+
+
+async def _provenance_report(settings: Settings) -> None:
+    db_path = Path(settings.data_dir) / "hia.duckdb"
+    async with aiohttp.ClientSession() as session:
+        client = _client_for(settings, session)
+        registries = await fetch_all(client)
+        automation_targets = await fetch_targets(client, registries.entities)
+        targets = {a.entity_id: a.targets for a in automation_targets}
+        logger.info("automation_targets_fetched", count=len(targets))
+
+    with EventStore(db_path, read_only=True) as store:
+        report = build_provenance_report(store, targets)
+    print(format_provenance_report(report))
 
 
 @app.command()

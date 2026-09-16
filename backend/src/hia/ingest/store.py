@@ -93,6 +93,33 @@ class EntityActivity:
 
 
 @dataclass(frozen=True, slots=True)
+class ProvenanceEvent:
+    """One row from the ``events`` table, narrowed to the three types the
+    provenance classifier (P3, hia.provenance) is built from:
+    ``automation_triggered``, ``script_started``, ``call_service``. Everything
+    Layer 1's context-chain resolver and Layer 2's automation-fire correlator need
+    is here."""
+
+    event_type: str
+    time_fired: datetime
+    context_id: str
+    context_parent_id: str | None
+    data: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class StateChangeForProvenance:
+    """The columns of a ``state_changes`` row the provenance classifier reads —
+    everything else about the row (state value, attributes, ...) is irrelevant to
+    working out who caused it."""
+
+    entity_id: str
+    changed_at: datetime | None
+    context_id: str | None
+    context_parent_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class LatestState:
     """The most recently known state of one entity — what a "live entity view"
     renders (hia.api), read straight from the store rather than requiring its own
@@ -302,6 +329,46 @@ class EventStore:
                 attributes=json.loads(r[2]) if r[2] is not None else None,
                 last_changed=r[3],
                 last_updated=r[4],
+            )
+            for r in rows
+        ]
+
+    def events_for_provenance(self) -> list[ProvenanceEvent]:
+        """``automation_triggered``/``script_started``/``call_service`` rows,
+        oldest first — the raw material ``hia.provenance``'s Layer 1 context-chain
+        resolver and Layer 2 automation-fire correlator are built from."""
+        rows = self._con.execute(
+            """
+            SELECT event_type, time_fired, context_id, context_parent_id, data
+            FROM events
+            WHERE event_type IN ('automation_triggered', 'script_started', 'call_service')
+            ORDER BY time_fired
+            """
+        ).fetchall()
+        return [
+            ProvenanceEvent(
+                event_type=r[0],
+                time_fired=r[1],
+                context_id=r[2],
+                context_parent_id=r[3],
+                data=json.loads(r[4]),
+            )
+            for r in rows
+        ]
+
+    def state_changes_for_provenance(self) -> list[StateChangeForProvenance]:
+        """Every ``state_changes`` row, oldest first, narrowed to what
+        ``hia.provenance`` needs to classify it."""
+        rows = self._con.execute(
+            """
+            SELECT entity_id, last_updated, context_id, context_parent_id
+            FROM state_changes
+            ORDER BY last_updated
+            """
+        ).fetchall()
+        return [
+            StateChangeForProvenance(
+                entity_id=r[0], changed_at=r[1], context_id=r[2], context_parent_id=r[3]
             )
             for r in rows
         ]

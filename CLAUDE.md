@@ -35,12 +35,19 @@ repo couldn't have been added by anyone). Getting there surfaced four real bugs
 executable bit on `run`/`finish` from being authored on a Windows dev machine,
 and a Docker build-cache bug where the `git clone` step's unchanging instruction
 text kept every rebuild reusing the first cached clone) — all detailed in
-`docs/HANDOFF.md`. **P0, P1 and P2 are all done. P3 (provenance classifier) is
-next.** The 72-hour unattended soak test can now run for real against the live
-add-on and should be kept running in the background. See
-[docs/HANDOFF.md](docs/HANDOFF.md) for the detail, including a real reconnect bug
-in the P0 client found and fixed during P2 (HA can interleave `event` messages with
-`subscribe_events` results across multiple pending subscriptions).
+`docs/HANDOFF.md`. **P0, P1 and P2 are all done.** `hia serve` is running against
+a real house right now for the 72-hour soak test — do not kill it to run something
+else against the same data directory. **P3 (provenance classifier) is split into
+two slices; slice 1 — `hia.provenance`, Layer 1 context-chain resolution and
+Layer 2 automation-fire correlation — is built and verified** (synthetically, plus
+one real REST check confirming the configured token is admin-privileged, which
+Layer 2's automation-config fetch needs). It deliberately classifies only
+`automation`/`unknown`, never `human` — see `hia.provenance.classify`'s docstring
+for why. Slice 2 (Layer 3 actor classification, the tagging UI, admission
+control) is next. See [docs/HANDOFF.md](docs/HANDOFF.md) for the detail, including
+a real reconnect bug in the P0 client found and fixed during P2 (HA can interleave
+`event` messages with `subscribe_events` results across multiple pending
+subscriptions).
 
 ## Read before designing anything
 
