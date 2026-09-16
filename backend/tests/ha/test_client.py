@@ -169,7 +169,15 @@ async def test_drops_events_under_backpressure_instead_of_blocking(
                 await server.push_event("state_changed", _state_changed_data(f"sensor.s{i}"))
             await asyncio.sleep(0.2)  # let the reader task drain the socket into the queue
 
-            first = await consume_task
+            # Bounded, not an unguarded `await consume_task`: this line hung
+            # indefinitely on GitHub Actions' Linux runners (never reproduced
+            # locally) and silently burned the platform's 6-hour job-execution
+            # ceiling on every CI run for a day before being noticed --
+            # pytest-timeout (pyproject.toml) is the suite-wide safety net now,
+            # but this bound turns a recurrence of this exact race into an
+            # immediate, specific TimeoutError pointing right at the stuck
+            # await, rather than a generic thread-dump from the global timeout.
+            first = await asyncio.wait_for(consume_task, timeout=5)
             assert first.seq == 1
             assert client.dropped_event_count > 0
         finally:

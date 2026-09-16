@@ -22,6 +22,36 @@ regardless of what had since been pushed or how many times "Rebuild" was clicked
 All four are detailed in the P2 packaging section below, each verified by
 reproducing it (not just reasoning about it) before trusting the fix.
 
+**A real CI incident, found and fixed the same day**: the backend CI job had been
+silently hanging for the full GitHub Actions 6-hour job-execution ceiling on
+*every* push since the P2 backend commit (`P2 backend: hia serve, plus a real
+client bug fixed along the way`, 2026-09-15) — burning roughly 30+ CI-hours across
+~8 pushes before the user noticed and flagged it. Root-caused via `gh run view
+--log` on several of the cancelled runs, not guessed: every single one stopped
+dead in the exact same place, right after `tests/ha/test_client.py
+::test_events_delivered_while_a_later_subscription_is_still_pending` passed and
+before `test_drops_events_under_backpressure_instead_of_blocking` printed
+anything at all — a real race in that test's unguarded `await consume_task`
+(waiting for the client's queue to deliver its first event under deliberate
+backpressure) that has **never reproduced locally**, on this dev machine, in any
+number of runs — Linux GitHub-hosted runners' scheduling/timing characteristics
+expose it and a fast local Windows box doesn't. Fixed two ways: the specific
+await is now bounded (`asyncio.wait_for(..., timeout=5)`, `tests/ha/test_client.py`),
+turning a recurrence into an immediate, specific `TimeoutError` instead of an
+indefinite hang; and `pytest-timeout` (`backend/pyproject.toml`, `timeout = 30`,
+`timeout_method = "thread"` — `thread` rather than the Unix-only `signal` default,
+so this also protects local Windows runs) is now a suite-wide safety net, so *any*
+future hang anywhere in the suite fails within 30 seconds with a thread-dump
+instead of silently consuming a 6-hour CI slot. The two CI runs still in flight
+against pre-fix commits were cancelled manually (`gh run cancel`) rather than left
+to also burn 6 hours each. Verified by running the full suite (still 63/63) in an
+isolated scratch venv (`UV_PROJECT_ENVIRONMENT` pointed elsewhere) rather than the
+project's own `.venv` — deliberately, since that `.venv` was mid-soak-test with
+`hia serve` holding its `hia.exe` entry point open, and `uv sync`/`uv add` cannot
+touch a running process's own locked executable; `uv lock` (resolve-and-write-lock
+only, no install) doesn't have that problem and was used to update
+`backend/uv.lock` without disturbing the soak test.
+
 **P3 slice 1 (provenance classifier, Layer 1 + Layer 2) is now built and
 verified** — synthetically against fake-HA fixtures, and with one real check
 against the live house (`HomeAssistantClient`'s new REST `.get()` method,
@@ -630,25 +660,30 @@ real accumulated history is real, near-term follow-up work, not done here.
 
 ## What to do next
 
-1. **Keep `hia serve` running unattended for 72+ hours** to close out P0/P1's
+1. **Confirm the CI hang is actually fixed** by watching the next push's backend
+   job complete in its normal ~1 minute rather than running long — the fix
+   (`pytest-timeout` + a bounded `await` in the specific race, above) was verified
+   locally in an isolated venv, not yet by an actual green GitHub Actions run,
+   since the race itself never reproduced locally in the first place.
+2. **Keep `hia serve` running unattended for 72+ hours** to close out P0/P1's
    soak-test criteria for real — the one piece of verification no single session
    can complete honestly. It's already running locally against the real house as
    of this writing (started earlier this session) — **do not kill or restart it**
    just to run something else against the same `HIA_DATA_DIR`; DuckDB's
    one-writer-or-many-readers model means a read-only tool (`hia data-quality`,
    `hia provenance-report`) cannot run at the same time regardless.
-2. **Run `hia provenance-report` against real accumulated history** once the
+3. **Run `hia provenance-report` against real accumulated history** once the
    store can safely be opened read-only (after the soak test above, or against a
    separate `HIA_DATA_DIR`) — the classifier itself is only verified
    synthetically plus one real REST smoke test so far (P3 slice 1, above); this
    is the natural next real-data check, same category as the soak test.
-3. **This real house has no HA automations configured at all** (confirmed via
+4. **This real house has no HA automations configured at all** (confirmed via
    `hia registry`) — Layer 2 correlation has nothing to correlate against here
    until some exist. If the user adds even one automation, `hia
    ha.automations.fetch_targets`'s actual *success* path (not just its 404
    path, which is all that's verified so far) becomes checkable for real. Worth
    asking about, not assuming.
-4. **P3 slice 2 — Layer 3 (actor classification) and admission control**
+5. **P3 slice 2 — Layer 3 (actor classification) and admission control**
    (`docs/05-provenance.md` §4 Layer 3, §6): classify every observed `user_id`
    as human/voice-bridge/service-account, the setup UI for tagging HA users, the
    temporal-regularity heuristic, and `automation_share`-based admission
@@ -657,10 +692,10 @@ real accumulated history is real, near-term follow-up work, not done here.
    the actual P3 exit criterion (a hand-labelled 200-row sample at >95%
    precision) — that validation needs real accumulated, Layer-3-classified
    history and manual labelling, neither of which exist yet.
-5. Consider running `/run-skill-generator` to capture the Playwright-based
+6. Consider running `/run-skill-generator` to capture the Playwright-based
    screenshot verification path as a project skill, since it wasn't available
    out of the box this time.
-6. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
+7. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
    gaps worth closing, but neither blocks P2 or P3 — track them, don't let them
    stall forward progress.
 
@@ -730,6 +765,7 @@ argument — but make the argument out loud.
 | Slice 1's classifier outputs `automation`/`unknown`, never `human` | CLAUDE.md's "abstain rather than guess" — without Layer 3, an unexplained row could be a real human action or an external automation (Node-RED) whose context looks human (`05-provenance.md` §3); guessing `human` would recreate the exact trap the taxonomy exists to avoid |
 | Automation configs fetched over REST (`/api/config/automation/config/{id}`), not the websocket API | This endpoint doesn't exist over the websocket API at all — confirmed by reading HA's own `config/automation.py` source, not assumed |
 | `extract_action_targets` walks generically by key name, skipping `condition`/`conditions`/`if` | A new HA action type is silently included rather than silently missed; explicitly excluding condition blocks avoids treating an entity a `choose` block only *reads* as something it can act on |
+| Suite-wide `pytest-timeout` (30s, `thread` method) | A real race in one test hung CI for the full 6-hour job ceiling on every push for a day before being noticed; never reproduced locally, so a global safety net matters more than root-causing this one test perfectly |
 
 ## Platform facts worth not re-deriving
 

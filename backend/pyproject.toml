@@ -35,6 +35,7 @@ dev = [
   "mypy>=1.13",
   "pytest>=8.3",
   "pytest-asyncio>=0.24",
+  "pytest-timeout>=2.3",
   "httpx>=0.28.1",
 ]
 
@@ -65,3 +66,12 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# A real CI incident, not a defensive default: a race in
+# tests/ha/test_client.py's backpressure test hung indefinitely on GitHub
+# Actions' Linux runners (never reproduced locally) and silently burned the
+# full 6-hour job-execution ceiling on every push for a day before being
+# noticed. `thread` (not the Unix-only `signal` default) so this also protects
+# local runs on this Windows dev machine, not just CI. 30s is generous headroom
+# over the ~5s the whole suite normally takes.
+timeout = 30
+timeout_method = "thread"
