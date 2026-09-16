@@ -80,15 +80,19 @@ without disturbing the soak test.
 — synthetically against fake-HA fixtures, and with one real check against the
 live house (`HomeAssistantClient`'s new REST `.get()` method, confirming the
 user's token is admin-privileged, which `05-provenance.md`'s Layer 2 needs).
-**Slice 2, part 1 (Layer 3 actor classification, backend only) is also now
-built and verified** — real users fetched live from the house (9 real accounts,
-including a second human user beyond the owner), plus two real bugs found and
-fixed on this dev machine (a FastAPI/`from __future__ import annotations`
-interaction that silently broke the confirm endpoint's request body, and a
-`TestClient`-plus-outbound-async-I/O hang in the same category `test_state.py`
-already documents). The frontend tagging page and admission control
-(`automation_share`) are still not built. See "P3, slice 1" and "P3, slice 2
-(part 1)" below for the detail.
+**Slice 2 (Layer 3 actor classification — storage, suggestion heuristics,
+API/CLI, and now the tagging UI) is functionally done, except admission
+control.** Real users fetched live from the house (9 real accounts, including a
+second human user beyond the owner), a real confirm-and-persist round trip
+verified through the actual UI plus a separate `curl` check, and two real bugs
+found and fixed on this dev machine along the way (a FastAPI/`from __future__
+import annotations` interaction that silently broke the confirm endpoint's
+request body, and a `TestClient`-plus-outbound-async-I/O hang in the same
+category `test_state.py` already documents). **Still outstanding: tagging the
+real house's accounts for real** (verification used a throwaway store, not the
+soak test's — the real `actor_classifications` table is still empty) and
+admission control (`automation_share`). See "P3, slice 1", "P3, slice 2 (part
+1)" and "P3, slice 2 (part 2)" below for the detail.
 
 ### P0 — the Home Assistant client
 
@@ -842,6 +846,54 @@ in `tests/ingest/test_store.py`, `test_state_changes_hourly_*` in
 `tests/api/test_app.py`), 4/4 → 8/8 frontend tests passing (4 new:
 `activityStore.test.ts`), eslint/tsc/vitest/`vite build` all clean.
 
+### P3, slice 2 (part 2) — Layer 3 tagging UI
+
+The other half of slice 2's backend work (above): a third "Actors" tab
+(`ActorsView.tsx`) against the already-built, already-tested
+`GET`/`POST /api/provenance/actors` endpoints — no backend changes needed at
+all, since the API was designed for exactly this from the start. A table of
+every HA account (name, observed event count, heuristic suggestion + its
+reason, current confirmed classification) with three buttons per row (Human /
+Voice bridge / Service account); clicking one `POST`s the confirmation and
+updates that row in place, with the just-confirmed button disabled so it's
+clear which class is now on record. Fetched once per tab visit, not polled —
+the endpoint makes its own live round trip to Home Assistant
+(`config/auth/list`), and nothing about a confirmed classification changes on
+its own between visits the way live entity state does.
+
+**Verified live end-to-end against the real house**, same throwaway-`hia
+serve` + Playwright pattern as the activity chart (a separate port, a fresh
+`HIA_DATA_DIR`, never touching the soak test): all 9 real accounts rendered
+with correct suggestions (the `Home Assistant Content`/`Supervisor`/`Home
+Assistant Cast` `system_generated` accounts suggested `Service account`; the
+owner, the second real human user, and all four `ThinkSmart` accounts
+correctly got no suggestion at all — "no heuristic matched"). Confirmed
+`Will` as `Human` through the real UI, then verified with a **separate** `curl
+GET` (not just trusting the optimistic UI update) that `confirmed_class:
+"human"` actually persisted server-side. No console errors either screenshot.
+
+**Real house's actual tagging state right now, worth recording**: this
+verification pass confirmed the owner's own account for real — if that
+write should stay (it's a legitimate confirmation, not test pollution, since
+it went to a *throwaway* store, not the soak-test's) is moot; it was written
+to the scratch `HIA_DATA_DIR` this verification used, which was deleted
+afterward. **The real, soak-test-backed store's `actor_classifications` table
+is still empty** — nobody has tagged anything through the add-on itself yet.
+That's the real next step once the store can be opened read-write again (i.e.
+once the soak test's `hia serve` — which now also serves this exact page — is
+the one being used for it, which it already can be, live, right now).
+
+With this, **P3 slice 2 is functionally complete except admission control**
+(`automation_share`, collision detection, §6) — Layer 3's classification
+storage, suggestion heuristics, API, CLI, and now the UI to actually use them
+are all built and verified live.
+
+No new backend tests (none needed); 8/8 frontend tests unchanged (the view
+itself is exercised by the live Playwright check above, not unit tests — its
+logic is thin enough, and the actual API contract already has backend
+coverage, that a full component test didn't earn its cost here the way
+`activityStore`'s pure bucketing logic did).
+
 ## What to do next
 
 1. ~~Confirm the CI hang is actually fixed~~ — **done**: the push containing
@@ -870,17 +922,18 @@ in `tests/ingest/test_store.py`, `test_state_changes_hourly_*` in
    ha.automations.fetch_targets`'s actual *success* path (not just its 404
    path, which is all that's verified so far) becomes checkable for real. Worth
    asking about, not assuming.
-5. **P3 slice 2, part 1 (Layer 3 backend) is done** — classification storage,
-   suggestion heuristics, and the API/CLI to confirm one are all built and
-   verified, including a live check against the real house's 9 real user
-   accounts. What's left of slice 2:
-   - **The frontend tagging page.** `GET /api/provenance/actors` and `POST
-     /api/provenance/actors/{user_id}` are ready to build against — a table of
-     users with their suggestion, a confirm control, and the "0 events so far"
-     case handled gracefully. The real house has two genuine human users (the
-     owner and one other) plus four `ThinkSmart` device accounts that need a
-     manual call — a real, not hypothetical, two-minute setup task once this
-     exists.
+5. **P3 slice 2 is done except admission control.** Layer 3's classification
+   storage, suggestion heuristics, API/CLI, and now the tagging UI (a real
+   "Actors" tab, verified live including a real confirm-and-persist round
+   trip) are all built and verified against the real house. **Tag the real
+   house's accounts for real** — the *soak-test* `hia serve` already serves
+   this exact page (nothing new to deploy); open it and confirm the owner, the
+   second real human user, and however the four `ThinkSmart` accounts should
+   be classified. This was deliberately done against a throwaway store during
+   verification, not the soak-test one, so the real store's
+   `actor_classifications` table is still empty — a genuine two-minute task
+   still outstanding, not a hypothetical one.
+   What's left of slice 2:
    - **Admission control** (`docs/05-provenance.md` §6): trailing-30-day
      `automation_share` per entity, the exclusion thresholds, and collision
      detection. Needs Layer 3 classifications to exist first (done), so this is
@@ -892,16 +945,18 @@ in `tests/ingest/test_store.py`, `test_state_changes_hourly_*` in
    - The actual P3 exit criterion (a hand-labelled 200-row sample at >95%
      precision, including 20+ sun/time-triggered changes) still needs real
      accumulated, Layer-3-classified history and manual labelling — neither
-     exists yet; this is the natural target once the tagging UI exists and the
-     soak test has run a while.
-6. **Once the store can be read again, try `hia actors` for real** — the live
-   `config/auth/list` fetch is verified, but merging it against real event
-   history (event counts, and whether the `ThinkSmart` accounts' regularity
-   score says anything once they have history) has not been checked end-to-end
-   against this house yet.
+     exists yet; this is the natural target once the accounts above are
+     actually tagged and the soak test has run a while.
+6. **Once the store can be read again, try `hia actors`/`hia
+   provenance-report` for real** against the accumulated soak-test history —
+   the live `config/auth/list` fetch and the classifier's logic are each
+   independently verified, but the whole pipeline running end-to-end against
+   real accumulated history (event counts, whether the `ThinkSmart` accounts'
+   regularity score says anything once they have history) hasn't been checked
+   yet.
 7. Consider running `/run-skill-generator` to capture the Playwright-based
-   screenshot verification path as a project skill, since it wasn't available
-   out of the box this time.
+   screenshot verification path as a project skill — used three times now
+   (P2, the activity chart, the actors tab) without ever being captured as one.
 8. `statistics` table backfill and live/backfill de-duplication (P1, above) are real
    gaps worth closing, but neither blocks P2 or P3 — track them, don't let them
    stall forward progress.

@@ -32,6 +32,22 @@ export interface HourlyActivity {
   count: number;
 }
 
+// Mirrors hia.provenance.actors.ActorClass — the three classes Layer 3 sorts
+// an HA account into (docs/05-provenance.md §4). Never inferred client-side;
+// this app only ever displays what the backend already decided or suggested.
+export type ActorClass = "human" | "voice_bridge" | "service_account";
+
+// Mirrors hia.api.actors.ActorRow.
+export interface ActorRow {
+  user_id: string;
+  name: string;
+  system_generated: boolean;
+  event_count: number;
+  suggested_class: ActorClass | null;
+  suggested_reason: string;
+  confirmed_class: ActorClass | null;
+}
+
 export interface StateChangedMessage {
   type: "state_changed";
   entity_id: string;

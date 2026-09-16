@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   connectLiveEvents,
+  fetchActors,
   fetchDataQuality,
   fetchEntities,
   fetchHourlyActivity,
@@ -11,13 +12,15 @@ import { ConnectionBadge } from "./components/ConnectionBadge";
 import { EntityList } from "./components/EntityList";
 import { DataQualityView } from "./components/DataQualityView";
 import { ActivityChart } from "./components/ActivityChart";
-import type { HourlyActivity, LatestState, QualityReport } from "./types";
+import { ActorsView } from "./components/ActorsView";
+import type { ActorRow, HourlyActivity, LatestState, QualityReport } from "./types";
 
-type Tab = "entities" | "data-quality";
+type Tab = "entities" | "data-quality" | "actors";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "entities", label: "Entities" },
   { id: "data-quality", label: "Data quality" },
+  { id: "actors", label: "Actors" },
 ];
 
 const DATA_QUALITY_POLL_MS = 10_000;
@@ -38,6 +41,8 @@ export default function App() {
   const [entitiesError, setEntitiesError] = useState<string | null>(null);
   const [report, setReport] = useState<QualityReport | null>(null);
   const [activity, setActivity] = useState<HourlyActivity[] | null>(null);
+  const [actors, setActors] = useState<ActorRow[] | null>(null);
+  const [actorsError, setActorsError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
@@ -94,6 +99,17 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    // Fetched once, on first visit to the tab — not polled (it makes its own
+    // live round trip to Home Assistant, api.ts's fetchActors comment) and not
+    // pushed live the way entities are (nothing about a confirmed
+    // classification changes on its own between visits).
+    if (tab !== "actors" || actors !== null) return;
+    fetchActors()
+      .then(setActors)
+      .catch((err: unknown) => setActorsError(String(err)));
+  }, [tab, actors]);
+
   return (
     <div className="min-h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
       <header className="border-b border-gray-200 dark:border-gray-800 px-4 py-3 flex items-center justify-between">
@@ -119,7 +135,7 @@ export default function App() {
       </nav>
 
       <main className="p-4">
-        {tab === "entities" ? (
+        {tab === "entities" && (
           <>
             {entitiesError && (
               <p className="text-red-600 dark:text-red-400 text-sm mb-3">
@@ -128,11 +144,27 @@ export default function App() {
             )}
             <EntityList entities={entities} />
           </>
-        ) : (
+        )}
+        {tab === "data-quality" && (
           <div className="space-y-6">
             <ActivityChart data={activity} />
             <DataQualityView report={report} />
           </div>
+        )}
+        {tab === "actors" && (
+          <ActorsView
+            actors={actors}
+            error={actorsError}
+            onConfirmed={(userId, actorClass) =>
+              setActors((prev) =>
+                prev
+                  ? prev.map((a) =>
+                      a.user_id === userId ? { ...a, confirmed_class: actorClass } : a,
+                    )
+                  : prev,
+              )
+            }
+          />
         )}
       </main>
     </div>
