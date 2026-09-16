@@ -894,6 +894,55 @@ logic is thin enough, and the actual API contract already has backend
 coverage, that a full component test didn't earn its cost here the way
 `activityStore`'s pure bucketing logic did).
 
+### A real bug, found by using the feature for real: the regularity heuristic false-positived on a real human
+
+Restarting the soak-test `hia serve` to pick up the new routes (see below — the
+running process's FastAPI route table is fixed at startup and doesn't see new
+code) was itself routine, but looking at the real `GET /api/provenance/actors`
+response that followed was not: **the owner's own account — a real person —
+was suggested `service_account`**, via `temporal_regularity` alone (time-of-day
+entropy 0.44, just under the 0.5 threshold). Not a synthetic edge case; this
+is exactly what live verification is for.
+
+Root cause, confirmed by pulling the real timestamps (`hia.provenance.actors`
+against the actual soak-test store) rather than guessed: two concentrated
+testing sessions, both around noon, on two different days. `05-provenance.md`
+§4 already names this failure mode almost exactly ("a shift worker's routine
+can look mechanical") — a real person's account absolutely can produce a
+peaked time-of-day distribution for innocent reasons, and time-of-day entropy
+alone cannot tell that apart from an automation.
+
+**Fixed by implementing the other signal the design doc already specified but
+the first pass deferred**: `interval_regularity()` — normalized Shannon
+entropy of inter-event gaps, log-scale bucketed so a real automation's
+near-constant firing interval (however long) reads as low-entropy regardless
+of its actual period, while a human's gaps (milliseconds within a click burst,
+tens of seconds between, hours between sessions) read as high-entropy almost
+by construction. `suggest_actor_class` now requires **both** signals to be
+independently suspicious before suggesting `service_account` via regularity —
+verified this actually resolves the real case, not just reasoned about it:
+the owner's real gaps scored 0.83 (highly irregular), and with the AND
+requirement the false suggestion is gone, confirmed against the exact same
+real timestamps and again live via `curl` after redeploying.
+
+A new regression test (`test_peaked_time_of_day_but_irregular_intervals_
+suggests_nothing`, `tests/provenance/test_actors.py`) encodes this exact
+scenario — real numbers derived from what was actually observed, not an
+abstract hypothetical — so this specific false positive can never silently
+come back. 86/86 → 89/89 tests passing.
+
+**The deeper lesson, worth being explicit about**: this heuristic was already
+fully unit-tested before today, including a "peaked timing suggests
+service_account" test — and it still shipped a real false positive on its
+very first exposure to real data, because the synthetic test cases were all
+internally consistent in ways real data isn't (the peaked-timing test's
+timestamps were *also* perfectly regularly spaced, so nothing in the test
+suite exercised "peaked but irregular" until real usage produced exactly
+that). Docs already framed this heuristic as weak and suggestion-only for
+good reason; this is the first concrete proof why, and a reminder that
+"thoroughly unit tested" and "verified against real data" are not the same
+claim — this project has said that before, and it was true again here.
+
 ## What to do next
 
 1. ~~Confirm the CI hang is actually fixed~~ — **done**: the push containing
@@ -903,12 +952,19 @@ coverage, that a full component test didn't earn its cost here the way
    led to the real fix), and the test rewrite is confirmed correct on GitHub's
    own Linux runners, not just locally.
 2. **Keep `hia serve` running unattended for 72+ hours** to close out P0/P1's
-   soak-test criteria for real — the one piece of verification no single session
-   can complete honestly. It's already running locally against the real house as
-   of this writing (started earlier this session) — **do not kill or restart it**
-   just to run something else against the same `HIA_DATA_DIR`; DuckDB's
-   one-writer-or-many-readers model means a read-only tool (`hia data-quality`,
-   `hia provenance-report`) cannot run at the same time regardless.
+   soak-test criteria for real. **This clock was reset once already**: the
+   original process (running ~24h) was deliberately restarted with the user's
+   explicit approval to pick up the new Layer 3/activity-chart backend routes
+   (a running process's FastAPI route table is fixed at startup — new code in
+   the repo has zero effect on it until restarted) — a real, useful thing to
+   know: **restarting `hia serve` is safe for the data** (DuckDB's WAL
+   recovered a forceful process kill cleanly, all 34,024 accumulated rows
+   intact, confirmed by comparing `/api/data-quality` before and after), it
+   just restarts the *continuous-uptime* clock, not the data. Avoid another
+   restart unless there's a real reason (new code that needs it, same as this
+   one) — DuckDB's one-writer-or-many-readers model still means a read-only
+   tool (`hia data-quality`, `hia provenance-report`) cannot run at the same
+   time as `hia serve` regardless of restarts.
 3. **Run `hia provenance-report` against real accumulated history** once the
    store can safely be opened read-only (after the soak test above, or against a
    separate `HIA_DATA_DIR`) — the classifier's logic is fully covered
@@ -1033,6 +1089,7 @@ argument — but make the argument out loud.
 | Actor name-matching splits automation tools from voice/smart-home bridges | docs lists both under one heuristic, but they need opposite classifications (`service_account` vs `voice_bridge`) — collapsing them would misclassify half the matches |
 | `ConfirmActorRequest` (Pydantic model) lives at module scope, not inside `create_app()` | Reproduced directly: with `from __future__ import annotations` active, FastAPI can't resolve a locally-scoped model's string annotation, and the route silently 422s on every request instead of reading the body |
 | Routes that make their own outbound HA call are tested by calling their logic directly, not through `TestClient` | Reproduced directly (caught by pytest-timeout): `TestClient`'s cross-thread portal bridge hangs against a route handler doing genuine outbound async I/O mid-request — the same root cause `test_state.py` already documented for the WebSocket relay, now confirmed to generalize |
+| Regularity suggestion requires *both* time-of-day and interval entropy to be low, not either alone | Live-found, not theoretical: the owner's own real account false-positived on time-of-day entropy alone (a peaked but innocent pattern — concentrated testing sessions); interval entropy correctly told it apart, and requiring both closes that whole class of false positive |
 
 ## Platform facts worth not re-deriving
 

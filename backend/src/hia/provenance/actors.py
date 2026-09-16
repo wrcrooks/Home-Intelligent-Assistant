@@ -74,24 +74,47 @@ def suggest_actor_class(
         if hint in name:
             return ActorSuggestion("voice_bridge", f"name matches known voice/smart-home bridge {hint!r}")
 
-    regularity = temporal_regularity(event_timestamps)
-    if regularity is not None and regularity < REGULARITY_SUSPICIOUS_BELOW:
+    time_of_day = temporal_regularity(event_timestamps)
+    intervals = interval_regularity(event_timestamps)
+    # Both signals must independently look automation-like before this suggests
+    # anything -- found necessary against real data, not assumed: the owner's
+    # own account, a real human, produced a peaked time-of-day distribution on
+    # its own (concentrated testing sessions around the same hour on two
+    # different days scored 0.44, just under the old single-signal threshold)
+    # that time-of-day entropy alone could not tell apart from an automation.
+    # What *did* tell them apart was interval entropy -- the owner's actual
+    # clicks landed anywhere from milliseconds to tens of seconds apart within
+    # a session, nothing like a real automation's near-constant firing
+    # interval. Requiring both lines up with docs/05-provenance.md §4's own
+    # framing of this as the weakest of the three heuristics: one peaked signal
+    # has too many innocent explanations (a fixed routine, a concentrated
+    # testing session, a shift worker) to suggest anything on its own.
+    if (
+        time_of_day is not None
+        and time_of_day < REGULARITY_SUSPICIOUS_BELOW
+        and intervals is not None
+        and intervals < REGULARITY_SUSPICIOUS_BELOW
+    ):
         return ActorSuggestion(
             "service_account",
-            f"low temporal-regularity entropy ({regularity:.2f}) -- "
-            "suspiciously machine-like timing, but this is a weak signal on its "
-            "own (a shift worker can look mechanical too); review before confirming",
+            f"low regularity entropy (time-of-day={time_of_day:.2f}, "
+            f"intervals={intervals:.2f}) -- suspiciously machine-like timing on "
+            "both signals, but this is still a weak signal (a shift worker can "
+            "look mechanical too); review before confirming",
         )
 
     return ActorSuggestion(None, "no heuristic matched -- looks like a real person")
 
 
 REGULARITY_SUSPICIOUS_BELOW = 0.5
-"""Normalized Shannon entropy (0-1) of an actor's time-of-day distribution.
-Below this, an actor's actions cluster tightly enough into a handful of
-time-of-day buckets to look automation-like -- picked to be conservative (only
-flags genuinely peaked distributions) since docs/05-provenance.md §4 is explicit
-this heuristic is a suggestion, not a verdict."""
+"""Shared threshold (0-1 normalized Shannon entropy) for both
+:func:`temporal_regularity` and :func:`interval_regularity` — an actor's
+actions have to cluster tightly enough on *both* signals to look
+automation-like before :func:`suggest_actor_class` suggests anything. Picked to
+be conservative (only flags genuinely peaked distributions) since
+docs/05-provenance.md §4 is explicit this heuristic is a suggestion, not a
+verdict — and confirmed live that time-of-day alone at this same threshold
+still false-positives on a real, if unusually concentrated, human account."""
 
 _TIME_OF_DAY_BUCKETS = 24
 """One bucket per hour -- coarse enough that a human's normal daily variation
@@ -99,14 +122,21 @@ doesn't get flagged, fine enough to catch "fires at 17:30:00 every day"."""
 
 
 def temporal_regularity(timestamps: list[datetime]) -> float | None:
-    """Normalized Shannon entropy of an actor's time-of-day distribution
-    (docs/05-provenance.md §4's regularity heuristic uses inter-event intervals
-    *and* time-of-day; this implements the time-of-day half, which needs no
-    minimum gap between consecutive events to be meaningful and degrades
-    gracefully with sparse data). 1.0 = perfectly uniform across the day (very
-    human). 0.0 = every single action at the exact same hour (very automation).
-    ``None`` when there isn't enough data (fewer than 5 events) to say anything
-    responsible."""
+    """Normalized Shannon entropy of an actor's time-of-day distribution — the
+    first of the two signals docs/05-provenance.md §4's regularity heuristic
+    describes ("inter-event intervals *and* time-of-day distribution"; the
+    second is :func:`interval_regularity`). 1.0 = perfectly uniform across the
+    day (very human). 0.0 = every single action at the exact same hour (very
+    automation). ``None`` when there isn't enough data (fewer than 5 events) to
+    say anything responsible.
+
+    **On its own this is not enough to suggest anything** — confirmed against
+    real data, not assumed: a real person's account can legitimately produce a
+    peaked distribution (a concentrated testing session, a fixed daily routine,
+    a shift worker) that looks identical to an automation by this signal alone.
+    See :func:`suggest_actor_class`, which requires this *and*
+    :func:`interval_regularity` to agree before suggesting ``service_account``.
+    """
     if len(timestamps) < 5:
         return None
 
@@ -117,3 +147,50 @@ def temporal_regularity(timestamps: list[datetime]) -> float | None:
     )
     max_entropy = math.log2(_TIME_OF_DAY_BUCKETS)
     return entropy / max_entropy
+
+
+_INTERVAL_BUCKET_EDGES_SECONDS = (1, 5, 30, 120, 600, 3600, 14400)
+"""Upper edge of each interval bucket, log-scaled rather than linear: an
+automation firing "every 5 minutes" and one firing "every 5 minutes ± jitter"
+both need to land in the same bucket, and a human's real gaps span many orders
+of magnitude in one session (sub-second UI double-fires up to multi-hour idle)
+— linear buckets would need unreasonable resolution to tell those apart."""
+
+
+def interval_regularity(timestamps: list[datetime]) -> float | None:
+    """Normalized Shannon entropy of an actor's inter-event gaps, bucketed on a
+    log scale (see :data:`_INTERVAL_BUCKET_EDGES_SECONDS`) — the second signal
+    docs/05-provenance.md §4 describes. 1.0 = gaps spread evenly across every
+    order of magnitude (very human: bursts of rapid clicks, then long pauses).
+    0.0 = every gap lands in the same bucket (very automation: a near-constant
+    firing interval). ``None`` when there are fewer than 5 gaps (6 events) to
+    compute from.
+
+    Found necessary, not just theoretically motivated: the owner's own real
+    account, tested live against this project's soak-test data, had a peaked
+    time-of-day distribution (concentrated testing sessions) that
+    :func:`temporal_regularity` alone read as suspiciously regular. This signal
+    correctly told it apart — real clicks during a testing session land
+    anywhere from milliseconds to tens of seconds apart, nothing like a real
+    automation's near-constant interval."""
+    if len(timestamps) < 6:
+        return None
+
+    sorted_ts = sorted(timestamps)
+    gaps = [
+        (b - a).total_seconds() for a, b in zip(sorted_ts, sorted_ts[1:], strict=False)
+    ]
+    bucket_counts = Counter(_interval_bucket(gap) for gap in gaps)
+    total = len(gaps)
+    entropy = -sum(
+        (count / total) * math.log2(count / total) for count in bucket_counts.values()
+    )
+    max_entropy = math.log2(len(_INTERVAL_BUCKET_EDGES_SECONDS) + 1)
+    return entropy / max_entropy
+
+
+def _interval_bucket(gap_seconds: float) -> int:
+    for i, edge in enumerate(_INTERVAL_BUCKET_EDGES_SECONDS):
+        if gap_seconds < edge:
+            return i
+    return len(_INTERVAL_BUCKET_EDGES_SECONDS)
